@@ -18,12 +18,9 @@ from __future__ import annotations
 from typing import List
 
 from fparser.two.Fortran2003 import (
-    Close_Spec_List,
     Close_Stmt,
     Connect_Spec,
-    Connect_Spec_List,
     Io_Control_Spec,
-    Io_Control_Spec_List,
     Name,
     Open_Stmt,
     Program,
@@ -105,44 +102,52 @@ class F90ErrOpenRead(FortranRule):
 
     @staticmethod
     def _has_iostat_or_err_open(node) -> bool:
-        """Check if an OPEN statement has IOSTAT= or ERR=."""
-        for child in node.children:
-            if isinstance(child, Connect_Spec_List):
-                for spec in child.children:
-                    if isinstance(spec, Connect_Spec) and spec.children:
-                        keyword = spec.children[0]
-                        if isinstance(keyword, str):
-                            kw = keyword.upper().strip()
-                            if kw in ("IOSTAT", "ERR"):
-                                return True
+        """Check if an OPEN statement has IOSTAT= or ERR=.
+
+        Uses walk() instead of isinstance() because fparser's
+        ParserFactory(std='f2008') creates Fortran2008.* class objects
+        that don't match Fortran2003 imports.
+        """
+        for spec in walk(node, Connect_Spec):
+            if spec.children:
+                keyword = spec.children[0]
+                if isinstance(keyword, str):
+                    kw = keyword.upper().strip()
+                    if kw in ("IOSTAT", "ERR"):
+                        return True
         return False
 
     @staticmethod
     def _has_iostat_or_err_read(node) -> bool:
-        """Check if a READ statement has IOSTAT=, ERR= or END=."""
-        for child in node.children:
-            if isinstance(child, Io_Control_Spec_List):
-                for spec in child.children:
-                    if isinstance(spec, Io_Control_Spec) and spec.children:
-                        keyword = spec.children[0]
-                        if isinstance(keyword, str):
-                            kw = keyword.upper().strip()
-                            if kw in ("IOSTAT", "ERR", "END"):
-                                return True
+        """Check if a READ statement has IOSTAT=, ERR= or END=.
+
+        Uses walk() for robustness across fparser module versions.
+        """
+        for spec in walk(node, Io_Control_Spec):
+            if spec.children:
+                keyword = spec.children[0]
+                if isinstance(keyword, str):
+                    kw = keyword.upper().strip()
+                    if kw in ("IOSTAT", "ERR", "END"):
+                        return True
         return False
 
     @staticmethod
     def _has_iostat_or_err_close(node) -> bool:
-        """Check if a CLOSE statement has IOSTAT= or ERR=."""
-        for child in node.children:
-            if isinstance(child, Close_Spec_List):
-                for spec in child.children:
-                    if hasattr(spec, "children") and spec.children:
-                        keyword = spec.children[0]
-                        if isinstance(keyword, str):
-                            kw = keyword.upper().strip()
-                            if kw in ("IOSTAT", "ERR"):
-                                return True
+        """Check if a CLOSE statement has IOSTAT= or ERR=.
+
+        Uses walk() for robustness across fparser module versions.
+        """
+        # Close_Spec is the per-specifier node in both Fortran2003/2008
+        from fparser.two.Fortran2003 import Close_Spec
+
+        for spec in walk(node, Close_Spec):
+            if hasattr(spec, "children") and spec.children:
+                keyword = spec.children[0]
+                if isinstance(keyword, str):
+                    kw = keyword.upper().strip()
+                    if kw in ("IOSTAT", "ERR"):
+                        return True
         return False
 
     @staticmethod
@@ -152,27 +157,22 @@ class F90ErrOpenRead(FortranRule):
         These don't need IOSTAT because they can't fail in the same way
         as file I/O.
         """
-        for child in node.children:
-            if isinstance(child, Io_Control_Spec_List):
-                for spec in child.children:
-                    if isinstance(spec, Io_Control_Spec) and spec.children:
-                        keyword = spec.children[0]
-                        # If UNIT= is a Name (character variable), it's internal
-                        if isinstance(keyword, str) and keyword.upper() == "UNIT":
-                            if len(spec.children) > 1:
-                                val = spec.children[1]
-                                if isinstance(val, Name):
-                                    return True  # internal file
-                        elif not isinstance(keyword, str):
-                            # First spec might be the unit directly
-                            pass
-                        # Check for * (stdin)
-                        s = _node_to_str(spec)
-                        if s == "*" or s.startswith("*,") or s.startswith("* ,"):
-                            return True
-                    elif isinstance(spec, Name):
-                        # Internal file read: READ(string, *) ...
-                        return True
-                    elif _node_to_str(spec) == "*":
-                        return True
+        for spec in walk(node, Io_Control_Spec):
+            if spec.children:
+                keyword = spec.children[0]
+                # If UNIT= is a Name (character variable), it's internal
+                if isinstance(keyword, str) and keyword.upper() == "UNIT":
+                    if len(spec.children) > 1:
+                        val = spec.children[1]
+                        if isinstance(val, Name):
+                            return True  # internal file
+                # Check for * (stdin)
+                s = _node_to_str(spec)
+                if s == "*" or s.startswith("*,") or s.startswith("* ,"):
+                    return True
+            elif isinstance(spec, Name):
+                # Internal file read: READ(string, *) ...
+                return True
+            elif _node_to_str(spec) == "*":
+                return True
         return False
