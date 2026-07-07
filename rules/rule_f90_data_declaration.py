@@ -21,6 +21,7 @@ from fparser.two.Fortran2003 import (
     Actual_Arg_Spec,
     Assignment_Stmt,
     Call_Stmt,
+    Data_Pointer_Object,
     Data_Ref,
     Execution_Part,
     Function_Stmt,
@@ -216,6 +217,16 @@ class F90DataDeclaration(FortranRule):
         # Structure_Constructor with Type_Name 'compare')
         for tn in walk(exec_part, Type_Name):
             skip.add(id(tn))
+
+        # 1e. Skip component names in Data_Pointer_Object (tlc%comp => ...)
+        # Data_Pointer_Object has children [Name(base), '%', Name(component)]
+        for dpo in walk(exec_part, Data_Pointer_Object):
+            names = walk(dpo, Name)
+            if names:
+                # First name is the base variable — keep it
+                # Rest are components — skip them
+                for n in names[1:]:
+                    skip.add(id(n))
 
         # 2. Skip keyword argument names in Actual_Arg_Spec (keyword=value)
         for arg_spec in walk(exec_part, Actual_Arg_Spec):

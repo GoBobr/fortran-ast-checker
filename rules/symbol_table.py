@@ -1016,10 +1016,16 @@ class ProjectSymbolTable:
         # Parse procedure declaration names
         if isinstance(proc_decl_list, Proc_Decl_List):
             for proc_decl in proc_decl_list.children:
-                # Proc_Decl children: [Name, ...] — first child is the name
+                # Proc_Decl_List children can be either Proc_Decl nodes
+                # (with Name children) or Name nodes directly (fparser
+                # sometimes puts Name directly as children of Proc_Decl_List)
                 proc_name = ""
                 has_init = False
-                if hasattr(proc_decl, "children"):
+                if isinstance(proc_decl, Name):
+                    # Direct Name node
+                    proc_name = _node_to_str(proc_decl)
+                elif hasattr(proc_decl, "children"):
+                    # Proc_Decl node — first Name child is the procedure name
                     for c in proc_decl.children:
                         if isinstance(c, Name):
                             proc_name = _node_to_str(c)
