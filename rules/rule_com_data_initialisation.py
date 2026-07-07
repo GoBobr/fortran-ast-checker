@@ -201,6 +201,19 @@ class ComDataInitialisation(FortranRule):
                 for name in guaranteed:
                     initialized.add(name.lower())
 
+        # Also collect writes from single-line IF statements (If_Stmt).
+        # These are conditional writes — the variable MIGHT be initialized.
+        # We treat them as "possibly initialized" to avoid false positives
+        # when the variable is used under the same conditional guard.
+        from fparser.two.Fortran2003 import If_Stmt
+
+        for if_stmt in walk(exec_part, If_Stmt):
+            # If_Stmt contains an Assignment_Stmt or Pointer_Assignment_Stmt
+            for nested in walk(if_stmt, (Assignment_Stmt, Pointer_Assignment_Stmt)):
+                w, _ = ComDataInitialisation._get_writes_reads(nested, skip_names)
+                for name in w:
+                    initialized.add(name.lower())
+
     @staticmethod
     def _split_if_branches(if_construct) -> List[List]:
         """Split an If_Construct into lists of nodes for each branch.
@@ -340,6 +353,22 @@ class ComDataInitialisation(FortranRule):
             if line > 0:
                 stmt_nodes.append((line, node))
 
+        # OPEN/CLOSE/INQUIRE statements (IOSTAT= variable is written)
+        from fparser.two.Fortran2003 import Open_Stmt, Close_Stmt, Inquire_Stmt
+
+        for node in walk(exec_part, Open_Stmt):
+            line = _get_line(node)
+            if line > 0:
+                stmt_nodes.append((line, node))
+        for node in walk(exec_part, Close_Stmt):
+            line = _get_line(node)
+            if line > 0:
+                stmt_nodes.append((line, node))
+        for node in walk(exec_part, Inquire_Stmt):
+            line = _get_line(node)
+            if line > 0:
+                stmt_nodes.append((line, node))
+
         # Sort by line number
         stmt_nodes.sort(key=lambda x: x[0])
 
@@ -380,6 +409,28 @@ class ComDataInitialisation(FortranRule):
                 if sym.intent == "OUT":
                     continue
 
+                # Skip zero-size arrays (DIMENSION(0) or DIMENSION(0,...))
+                # — no elements to initialize, operations are well-defined no-ops
+                is_zero_size = False
+                for attr in sym.attributes:
+                    if attr.startswith("DIMENSION("):
+                        dims_str = attr[len("DIMENSION(") : -1]
+                        # Check if all dimensions are 0
+                        dims = [d.strip() for d in dims_str.split(",")]
+                        if all(d == "0" for d in dims):
+                            is_zero_size = True
+                            break
+                if is_zero_size:
+                    continue
+
+                # Skip variables of derived types with only allocatable
+                # components — allocatables are auto-initialized to
+                # unallocated state at declaration
+                if sym.type.startswith("TYPE("):
+                    type_name = sym.type[len("TYPE(") : -1].strip().lower()
+                    if self._is_allocatable_only_type(symbol_table, scope, type_name):
+                        continue
+
                 # Flag it
                 seen_violations.add(name_lower)
                 violations.append(
@@ -410,11 +461,35 @@ class ComDataInitialisation(FortranRule):
         writes: Set[str] = set()
         reads: Set[str] = set()
 
+        # Inquiry intrinsics: return shape/property info without reading
+        # array values. Their arguments should NOT be treated as reads.
+        INQUIRY_INTRINSICS = {
+            "size", "lbound", "ubound", "shape", "allocated",
+            "present", "extent", "rank", "is_contiguous",
+            "lcobound", "ucobound", "coshape",
+        }
+        # Intrinsics with INTENT(OUT) arguments — their arguments should
+        # be treated as writes (not reads).
+        INTRINSICS_WITH_OUTPUT_ARGS = {
+            "nf90_inq_varid", "nf90_inq_path", "nf90_inq_dimid",
+            "nf90_inquire", "nf90_inquire_dimension",
+            "nf90_inquire_variable", "nf90_inquire_attribute",
+            "nf90_get_var", "nf90_get_att",
+            "nf90_inq_var_chunking", "nf90_inq_var_fill",
+            "nf90_inq_var_endian", "nf90_inq_var_filter",
+            "nf90_inq_grp_ncid", "nf90_inq_ncid",
+            "torch_tensor_from_array", "torch_tensor_to_array",
+            "torch_tensor_from_blob", "torch_tensor_to_blob",
+        }
+
         from fparser.two.Fortran2003 import (
             Assignment_Stmt,
             Call_Stmt,
+            Close_Stmt,
+            Inquire_Stmt,
             Loop_Control,
             Nonlabel_Do_Stmt,
+            Open_Stmt,
             Pointer_Assignment_Stmt,
             Read_Stmt,
             Write_Stmt,
@@ -443,21 +518,58 @@ class ComDataInitialisation(FortranRule):
                 # fparser parses function calls as Part_Ref (can't distinguish
                 # from array access without declarations), so we handle both
                 # Function_Reference and Part_Ref nodes.
-                from fparser.two.Fortran2003 import Part_Ref, Section_Subscript_List
+                from fparser.two.Fortran2003 import Part_Ref, Section_Subscript_List, Intrinsic_Function_Reference, Intrinsic_Name
 
                 func_arg_ids: Set[int] = set()
+                inquiry_arg_ids: Set[int] = set()
+                # Intrinsic_Function_Reference nodes (SIZE, LBOUND, etc.)
+                for intr_ref in walk(rhs, Intrinsic_Function_Reference):
+                    intr_name = ""
+                    for child in intr_ref.children:
+                        if isinstance(child, Name):
+                            intr_name = _node_to_str(child).lower()
+                            break
+                        if isinstance(child, Intrinsic_Name):
+                            intr_name = str(child).lower()
+                            break
+                    if intr_name in INQUIRY_INTRINSICS:
+                        # Shape inquiry — args are not reads
+                        for n in walk(intr_ref, Name):
+                            inquiry_arg_ids.add(id(n))
+                    elif intr_name in INTRINSICS_WITH_OUTPUT_ARGS:
+                        # Intrinsic with INTENT(OUT) args — treat as writes
+                        for arg_spec in walk(intr_ref, Actual_Arg_Spec):
+                            for n in walk(arg_spec, Name):
+                                func_arg_ids.add(id(n))
                 # Function_Reference nodes
                 for func_ref in walk(rhs, Function_Reference):
-                    for arg_spec in walk(func_ref, Actual_Arg_Spec):
-                        for n in walk(arg_spec, Name):
-                            func_arg_ids.add(id(n))
+                    # Get function name from first child
+                    fr_children = list(func_ref.children)
+                    fr_name = _node_to_str(fr_children[0]).lower() if fr_children else ""
+                    if fr_name in INQUIRY_INTRINSICS:
+                        # Shape inquiry — args are not reads
+                        for arg_spec in walk(func_ref, Actual_Arg_Spec):
+                            for n in walk(arg_spec, Name):
+                                inquiry_arg_ids.add(id(n))
+                    else:
+                        # Treat all function args as writes (conservative —
+                        # covers non-intrinsic functions and intrinsics with
+                        # INTENT(OUT) args like nf90_inq_varid)
+                        for arg_spec in walk(func_ref, Actual_Arg_Spec):
+                            for n in walk(arg_spec, Name):
+                                func_arg_ids.add(id(n))
                 # Part_Ref nodes (may be function calls)
                 for part_ref in walk(rhs, Part_Ref):
                     children = list(part_ref.children)
                     if len(children) >= 2 and isinstance(children[1], Section_Subscript_List):
                         func_name = _node_to_str(children[0]).lower()
-                        # Skip if it's a known intrinsic (already handled)
-                        if func_name not in FORTRAN_INTRINSICS:
+                        if func_name in INQUIRY_INTRINSICS:
+                            # Shape inquiry — args are not reads
+                            for n in walk(children[1], Name):
+                                inquiry_arg_ids.add(id(n))
+                        elif func_name not in FORTRAN_INTRINSICS or func_name in INTRINSICS_WITH_OUTPUT_ARGS:
+                            # Non-intrinsic or intrinsic with output args:
+                            # treat args as writes (conservative)
                             for n in walk(children[1], Name):
                                 func_arg_ids.add(id(n))
                 for n in func_arg_ids:
@@ -469,20 +581,26 @@ class ComDataInitialisation(FortranRule):
                     if ido_names:
                         implied_do_vars.add(id(ido_names[0]))
                 for n in walk(rhs, Name):
-                    if id(n) not in skip_names and id(n) not in implied_do_vars and id(n) not in func_arg_ids:
+                    if (
+                        id(n) not in skip_names
+                        and id(n) not in implied_do_vars
+                        and id(n) not in func_arg_ids
+                        and id(n) not in inquiry_arg_ids
+                    ):
                         reads.add(_node_to_str(n))
 
         elif isinstance(node, Pointer_Assignment_Stmt):
+            # ptr => target
+            # The => operator associates a pointer with target memory.
+            # It does NOT read the target's values — only the pointer
+            # (LHS) is written. The RHS target should not be a read.
             children = list(node.children)
             if len(children) >= 3:
                 lhs = children[0]
-                rhs = children[2]
                 for n in walk(lhs, Name):
                     if id(n) not in skip_names:
                         writes.add(_node_to_str(n))
-                for n in walk(rhs, Name):
-                    if id(n) not in skip_names:
-                        reads.add(_node_to_str(n))
+                # RHS is a pointer association target, not a value read.
 
         elif isinstance(node, Nonlabel_Do_Stmt):
             # DO var = start, end [, step]
@@ -497,9 +615,40 @@ class ComDataInitialisation(FortranRule):
                 if names:
                     # First name is the loop variable (written)
                     writes.add(_node_to_str(names[0]))
-                    # Rest are reads
+                    # Collect Name IDs inside inquiry intrinsics (SIZE, etc.)
+                    # — these are shape inquiries, not value reads
+                    from fparser.two.Fortran2003 import (
+                        Part_Ref,
+                        Section_Subscript_List,
+                        Intrinsic_Function_Reference,
+                    )
+
+                    inquiry_ids: Set[int] = set()
+                    # Check Intrinsic_Function_Reference nodes (SIZE, LBOUND, etc.)
+                    for intr_ref in walk(lc, Intrinsic_Function_Reference):
+                        intr_name = ""
+                        for child in intr_ref.children:
+                            if isinstance(child, Name):
+                                intr_name = _node_to_str(child).lower()
+                                break
+                            from fparser.two.Fortran2003 import Intrinsic_Name
+                            if isinstance(child, Intrinsic_Name):
+                                intr_name = str(child).lower()
+                                break
+                        if intr_name in INQUIRY_INTRINSICS:
+                            for n in walk(intr_ref, Name):
+                                inquiry_ids.add(id(n))
+                    # Also check Part_Ref nodes (may be function calls)
+                    for part_ref in walk(lc, Part_Ref):
+                        pr_children = list(part_ref.children)
+                        if len(pr_children) >= 2 and isinstance(pr_children[1], Section_Subscript_List):
+                            func_name = _node_to_str(pr_children[0]).lower()
+                            if func_name in INQUIRY_INTRINSICS:
+                                for n in walk(pr_children[1], Name):
+                                    inquiry_ids.add(id(n))
+                    # Rest are reads (excluding inquiry args)
                     for n in names[1:]:
-                        if id(n) not in skip_names:
+                        if id(n) not in skip_names and id(n) not in inquiry_ids:
                             reads.add(_node_to_str(n))
 
         elif isinstance(node, Read_Stmt):
@@ -525,6 +674,14 @@ class ComDataInitialisation(FortranRule):
                 for n in names[1:]:
                     if id(n) not in skip_names:
                         reads.add(_node_to_str(n))
+
+        elif isinstance(node, (Open_Stmt, Close_Stmt, Inquire_Stmt)):
+            # OPEN/CLOSE/INQUIRE statements with IOSTAT=, ERR=, END=
+            # specifiers write to those variables. Conservative: treat
+            # all Names as writes (avoids false positives on IOSTAT).
+            for n in walk(node, Name):
+                if id(n) not in skip_names:
+                    writes.add(_node_to_str(n))
 
         elif isinstance(node, Call_Stmt):
             # CALL sub(arg1, arg2, ...)
@@ -554,6 +711,29 @@ class ComDataInitialisation(FortranRule):
         if m:
             return m.group(1)
         return ""
+
+    @staticmethod
+    def _is_allocatable_only_type(
+        symbol_table: ProjectSymbolTable, scope, type_name: str
+    ) -> bool:
+        """Check if a derived type has only allocatable components.
+
+        Allocatable components are auto-initialized to unallocated state
+        at declaration, so variables of such types are always well-defined.
+        """
+        # Search all modules for the derived type definition
+        for mod_info in symbol_table._modules.values():
+            if type_name in mod_info.derived_types:
+                components = mod_info.derived_types[type_name]
+                if not components:
+                    continue
+                # Check if all components are allocatable
+                all_allocatable = all(
+                    comp.is_allocatable for comp in components.values()
+                )
+                if all_allocatable:
+                    return True
+        return False
 
     @staticmethod
     def _collect_skip_names(exec_part: Execution_Part) -> Set[int]:
