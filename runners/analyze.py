@@ -186,6 +186,11 @@ def run_analysis(
     parser = ParserFactory().create(std="f2008")
 
     all_violations: List[Violation] = []
+    # Track seen violations to deduplicate — when an INCLUDE file is
+    # included by multiple parent modules, the same code is analyzed
+    # multiple times, producing identical violations.  We keep only
+    # the first occurrence of each (file_path, line, rule_key, message).
+    seen_violation_keys: set = set()
     files_analyzed = 0
     files_failed = 0
     failed_files = []
@@ -217,7 +222,19 @@ def run_analysis(
                             )
                         elif not violation.file_path:
                             violation.file_path = rel_path
-                    all_violations.extend(v)
+                    # Deduplicate: skip violations we've already seen
+                    # (same file, line, rule, message — happens when an
+                    # INCLUDE file is included by multiple parent modules)
+                    for violation in v:
+                        key = (
+                            violation.file_path,
+                            violation.line,
+                            violation.rule_key,
+                            violation.message,
+                        )
+                        if key not in seen_violation_keys:
+                            seen_violation_keys.add(key)
+                            all_violations.append(violation)
                 except Exception as e:
                     logger.warning(
                         f"Rule {rule.rule_key} failed on {rel_path}: {e}"

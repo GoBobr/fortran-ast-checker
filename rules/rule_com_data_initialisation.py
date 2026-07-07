@@ -26,6 +26,11 @@ from fparser.two.Fortran2003 import (
     Execution_Part,
     Function_Stmt,
     Function_Reference,
+    If_Construct,
+    If_Then_Stmt,
+    Else_Stmt,
+    Else_If_Stmt,
+    End_If_Stmt,
     Name,
     Pointer_Assignment_Stmt,
     Program,
@@ -74,6 +79,10 @@ class ComDataInitialisation(FortranRule):
 
             # Collect variables initialized via DATA statements (Fortran 77 style)
             self._collect_data_stmt_initialized(ast, scope.name, initialized)
+
+            # Collect variables written in ALL branches of IF/ELSE constructs
+            # (these are guaranteed to be initialized regardless of which branch runs)
+            self._collect_if_else_initialized(exec_part, initialized)
 
             # Walk execution statements in order, tracking reads before writes
             violations.extend(
@@ -150,6 +159,77 @@ class ComDataInitialisation(FortranRule):
                 # Simple heuristic: collect all Name nodes that appear
                 # before the first '/' in the Data_Stmt_Set
                 initialized.add(_node_to_str(name_node).lower())
+
+    @staticmethod
+    def _collect_if_else_initialized(exec_part: Execution_Part, initialized: Set[str]):
+        """Collect variables written in ALL branches of IF/ELSE constructs.
+
+        If a variable is assigned in every branch of an IF/ELSE IF/ELSE
+        construct, it is guaranteed to be initialized regardless of which
+        branch executes.  We mark such variables as initialized so they
+        are not falsely flagged when used after the END IF.
+
+        Only top-level IF constructs in the execution part are analyzed
+        (nested IFs inside branches are handled recursively).
+        """
+        skip_names: Set[int] = set()
+
+        for if_construct in walk(exec_part, If_Construct):
+            # Split the If_Construct into branches
+            branches = ComDataInitialisation._split_if_branches(if_construct)
+            if len(branches) < 2:
+                continue  # No ELSE — can't guarantee initialization
+
+            # Collect writes from each branch (including nested If_Stmts)
+            branch_writes: List[Set[str]] = []
+            for branch_nodes in branches:
+                writes: Set[str] = set()
+                for node in branch_nodes:
+                    # Direct assignments
+                    w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                    writes.update(w)
+                    # Assignments nested inside single-line IF statements
+                    for nested in walk(node, (Assignment_Stmt, Pointer_Assignment_Stmt)):
+                        if nested is not node:
+                            w2, _ = ComDataInitialisation._get_writes_reads(nested, skip_names)
+                            writes.update(w2)
+                branch_writes.append(writes)
+
+            # Variables written in ALL branches are guaranteed initialized
+            if branch_writes:
+                guaranteed = set.intersection(*branch_writes)
+                for name in guaranteed:
+                    initialized.add(name.lower())
+
+    @staticmethod
+    def _split_if_branches(if_construct) -> List[List]:
+        """Split an If_Construct into lists of nodes for each branch.
+
+        Returns a list of branches, where each branch is a list of
+        statement nodes.  The first branch is the IF THEN block,
+        subsequent branches are ELSE IF blocks, and the last (if present)
+        is the ELSE block.
+        """
+        branches: List[List] = []
+        current_branch: List = []
+
+        for child in if_construct.children:
+            if isinstance(child, (If_Then_Stmt, Else_Stmt, Else_If_Stmt)):
+                if current_branch or isinstance(child, If_Then_Stmt):
+                    if current_branch:
+                        branches.append(current_branch)
+                    current_branch = []
+            elif isinstance(child, End_If_Stmt):
+                if current_branch:
+                    branches.append(current_branch)
+                current_branch = []
+            else:
+                current_branch.append(child)
+
+        if current_branch:
+            branches.append(current_branch)
+
+        return branches
 
     def _collect_initialized(
         self,
