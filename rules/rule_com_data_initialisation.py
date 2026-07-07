@@ -484,8 +484,13 @@ class ComDataInitialisation(FortranRule):
         uninitialized at the read site.
         """
         from fparser.two.Fortran2003 import (
-            Block_Nonlabel_Do_Construct,
             Allocate_Stmt,
+            Block_Nonlabel_Do_Construct,
+            Close_Stmt,
+            Inquire_Stmt,
+            Open_Stmt,
+            Read_Stmt,
+            Write_Stmt,
         )
 
         for do_construct in walk(exec_part, Block_Nonlabel_Do_Construct):
@@ -813,7 +818,7 @@ class ComDataInitialisation(FortranRule):
         at declaration, so variables of such types are always well-defined.
         """
         # Search all modules for the derived type definition
-        for mod_info in symbol_table._modules.values():
+        for mod_info in symbol_table.modules.values():
             if type_name in mod_info.derived_types:
                 components = mod_info.derived_types[type_name]
                 if not components:

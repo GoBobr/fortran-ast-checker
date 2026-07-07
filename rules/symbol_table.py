@@ -115,7 +115,17 @@ def _read_fortran_file(fpath: str, parser):
         # .source to the file path so that _get_source_file_path() can
         # recover the real file name for violation reporting.
         reader.source = fpath
-        return parser(reader)
+        # Suppress fparser's CRITICAL log messages that fire when the
+        # FortranStringReader encounters the same parse error during
+        # iteration (e.g. "STOPPED READING", "While processing ...").
+        # We already handle the failure via the exception below.
+        fparser_logger = logging.getLogger("fparser.common.readfortran")
+        old_level = fparser_logger.level
+        fparser_logger.setLevel(logging.CRITICAL + 1)
+        try:
+            return parser(reader)
+        finally:
+            fparser_logger.setLevel(old_level)
 
 
 # ---------------------------------------------------------------------------
