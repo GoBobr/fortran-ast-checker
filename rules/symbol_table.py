@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from fparser.common.readfortran import FortranFileReader
+from fparser.common.readfortran import FortranFileReader, FortranStringReader
 from fparser.two.Fortran2003 import (
     Access_Spec,
     Allocate_Stmt,
@@ -74,6 +74,44 @@ from fparser.two.parser import ParserFactory
 from fparser.two.utils import walk
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Preprocessor macro handling
+# ---------------------------------------------------------------------------
+# fparser cannot handle C-preprocessor macros like __FILE__ and __LINE__.
+# We replace them with dummy values before parsing.
+_PP_FILE_RE = re.compile(r'__FILE__')
+_PP_LINE_RE = re.compile(r'__LINE__')
+
+
+def _preprocess_fortran_source(source: str) -> str:
+    """Replace __FILE__ and __LINE__ macros with dummy values.
+
+    ``__FILE__`` is replaced with a string literal, ``__LINE__`` with
+    the integer ``0``.  This allows fparser to parse files that use
+    these macros without a separate preprocessing step.
+    """
+    source = _PP_FILE_RE.sub('"placeholder.f90"', source)
+    source = _PP_LINE_RE.sub('0', source)
+    return source
+
+
+def _read_fortran_file(fpath: str, parser):
+    """Read and parse a Fortran file, handling __FILE__/__LINE__ macros.
+
+    Returns the AST, or raises the original exception on parse failure.
+    """
+    try:
+        reader = FortranFileReader(fpath)
+        return parser(reader)
+    except Exception:
+        # Try again with __FILE__/__LINE__ replaced
+        with open(fpath, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        source = _preprocess_fortran_source(source)
+        reader = FortranStringReader(source, ignore_comments=False)
+        return parser(reader)
+
 
 # ---------------------------------------------------------------------------
 # Fortran intrinsic functions — used by rules to avoid flagging intrinsics
@@ -423,6 +461,16 @@ FORTRAN_INTRINSICS: Set[str] = set(INTRINSIC_RETURN_TYPES.keys()) | {
     "not",
     "lshift",
     "rshift",
+    # Fortran 2008 degree intrinsics (trigonometric functions in degrees)
+    "acosd",
+    "acosh",
+    "asind",
+    "atand",
+    "atan2d",
+    "cosd",
+    "sind",
+    "tand",
+    "cotand",
     "iand",
     "ior",
     "ieor",
@@ -799,15 +847,14 @@ class ProjectSymbolTable:
             Root directory of the source tree (for relative path display).
         """
         self.files = fortran_files
-        self._parser = ParserFactory().create(std="f2003")
+        self._parser = ParserFactory().create(std="f2008")
 
         # Parse all files, store ASTs
         asts: List[Tuple[str, str, Program]] = []  # (abs_path, rel_path, ast)
         for fpath in fortran_files:
             rel_path = os.path.relpath(fpath, source_root) if source_root else fpath
             try:
-                reader = FortranFileReader(fpath)
-                ast = self._parser(reader)
+                ast = _read_fortran_file(fpath, self._parser)
                 asts.append((fpath, rel_path, ast))
             except Exception as e:
                 self.parse_failures.append((rel_path, str(e)[:200]))

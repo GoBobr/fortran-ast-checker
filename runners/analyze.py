@@ -57,7 +57,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from fparser.two.parser import ParserFactory
 from fparser.common.readfortran import FortranFileReader
 
-from rules.symbol_table import ProjectSymbolTable
+from rules.symbol_table import ProjectSymbolTable, _read_fortran_file
 from rules.base_rule import Violation
 from rules.rule_f90_data_declaration import F90DataDeclaration
 from rules.rule_com_type_expression import ComTypeExpression
@@ -183,7 +183,7 @@ def run_analysis(
 
     # Step 3: Parse and run rules
     print(f"Running {len(rules)} rules...")
-    parser = ParserFactory().create(std="f2003")
+    parser = ParserFactory().create(std="f2008")
 
     all_violations: List[Violation] = []
     files_analyzed = 0
@@ -200,8 +200,7 @@ def run_analysis(
             continue
 
         try:
-            reader = FortranFileReader(fpath)
-            ast = parser(reader)
+            ast = _read_fortran_file(fpath, parser)
             files_analyzed += 1
             for rule in rules:
                 try:

@@ -20,6 +20,9 @@ from typing import List, Set
 from fparser.two.Fortran2003 import (
     Actual_Arg_Spec,
     Assignment_Stmt,
+    Associate_Stmt,
+    Association,
+    Association_List,
     Call_Stmt,
     Data_Pointer_Object,
     Data_Ref,
@@ -97,7 +100,8 @@ class F90DataDeclaration(FortranRule):
                 continue
 
             # Build a set of Name node IDs to skip (components, keyword args, proc names)
-            skip_names = self._collect_skip_names(exec_part)
+            # and a set of variable names introduced by ASSOCIATE blocks
+            skip_names, associate_names = self._collect_skip_names(exec_part)
 
             # Collect all Name nodes in the execution part
             # Name nodes don't have line numbers in fparser, so we track
@@ -124,6 +128,10 @@ class F90DataDeclaration(FortranRule):
 
                 # Skip intrinsics
                 if name_lower in FORTRAN_INTRINSICS:
+                    continue
+
+                # Skip ASSOCIATE block variables (introduced via `associate (var => expr)`)
+                if name_lower in associate_names:
                     continue
 
                 # Skip numeric literals (shouldn't be Name nodes, but just in case)
@@ -174,16 +182,23 @@ class F90DataDeclaration(FortranRule):
                         stack.append((current_line, child))
 
     @staticmethod
-    def _collect_skip_names(exec_part: Execution_Part) -> Set[int]:
-        """Collect Name node IDs that should be skipped.
+    def _collect_skip_names(exec_part: Execution_Part) -> tuple[Set[int], Set[str]]:
+        """Collect Name node IDs and variable names that should be skipped.
 
-        This includes:
+        Returns a tuple of (skip_ids, associate_names).
+
+        skip_ids includes:
         - Derived type component names (after % in Data_Ref)
         - Keyword argument names (first child of Actual_Arg_Spec)
         - Subroutine names in Call_Stmt
         - Function names in Function_Reference
+
+        associate_names includes:
+        - Variable names introduced by ASSOCIATE blocks (checked by name, not by node ID,
+          because different Name nodes refer to the same variable)
         """
         skip: Set[int] = set()
+        associate_names: Set[str] = set()
 
         # 1. Skip component names in Data_Ref (a%b%c — skip b and c)
         for data_ref in walk(exec_part, Data_Ref):
@@ -250,7 +265,24 @@ class F90DataDeclaration(FortranRule):
             if children and isinstance(children[0], Name):
                 skip.add(id(children[0]))
 
-        return skip
+        # 5. Skip variable names introduced by ASSOCIATE blocks
+        #    associate (var => expr, ...) — var is the first child of each Association
+        #    We collect both the node ID (for the Name in the Associate_Stmt)
+        #    and the name string (for Name nodes used in the body that refer to
+        #    the same associated variable)
+        for assoc_stmt in walk(exec_part, Associate_Stmt):
+            for child in assoc_stmt.children:
+                if isinstance(child, Association_List):
+                    for assoc in child.children:
+                        if isinstance(assoc, Association):
+                            # Association children: [Name(assoc_var), '=>', expr]
+                            if assoc.children and isinstance(assoc.children[0], Name):
+                                skip.add(id(assoc.children[0]))
+                                assoc_name = _node_to_str(assoc.children[0])
+                                if assoc_name:
+                                    associate_names.add(assoc_name.lower())
+
+        return skip, associate_names
 
     @staticmethod
     def _find_execution_part(ast: Program, scope_name: str):

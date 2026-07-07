@@ -75,18 +75,18 @@ class F90ErrAllocate(FortranRule):
         """Check if an Allocate_Stmt has STAT= in its Alloc_Opt_List.
 
         Allocate_Stmt children: [None, Allocation_List, Alloc_Opt_List]
+
+        Note: Under the f2008 parser, Alloc_Opt_List and Alloc_Opt may be
+        from fparser.two.Fortran2008 (not Fortran2003), so we use walk()
+        with Alloc_Opt which is shared via inheritance.
         """
-        for child in node.children:
-            if isinstance(child, Alloc_Opt_List):
-                for opt in child.children:
-                    if isinstance(opt, Alloc_Opt):
-                        # Alloc_Opt children: [keyword_str, value]
-                        if opt.children:
-                            keyword = opt.children[0]
-                            if isinstance(keyword, str):
-                                kw = keyword.upper().strip()
-                                if kw == "STAT":
-                                    return True
+        for opt in walk(node, Alloc_Opt):
+            if opt.children:
+                keyword = opt.children[0]
+                if isinstance(keyword, str):
+                    kw = keyword.upper().strip()
+                    if kw == "STAT":
+                        return True
         return False
 
     @staticmethod
@@ -95,14 +95,11 @@ class F90ErrAllocate(FortranRule):
 
         Deallocate_Stmt children: [Allocate_Object_List, Dealloc_Opt_List]
         """
-        for child in node.children:
-            if isinstance(child, Dealloc_Opt_List):
-                for opt in child.children:
-                    if isinstance(opt, Dealloc_Opt):
-                        if opt.children:
-                            keyword = opt.children[0]
-                            if isinstance(keyword, str):
-                                kw = keyword.upper().strip()
-                                if kw == "STAT":
-                                    return True
+        for opt in walk(node, Dealloc_Opt):
+            if opt.children:
+                keyword = opt.children[0]
+                if isinstance(keyword, str):
+                    kw = keyword.upper().strip()
+                    if kw == "STAT":
+                        return True
         return False
