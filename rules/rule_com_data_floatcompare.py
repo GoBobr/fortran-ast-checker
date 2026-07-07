@@ -17,6 +17,8 @@ from typing import List
 from fparser.two.Fortran2003 import (
     Data_Ref,
     Execution_Part,
+    Intrinsic_Function_Reference,
+    Intrinsic_Name,
     Level_4_Expr,
     Name,
     Part_Ref,
@@ -91,6 +93,14 @@ class ComDataFloatCompare(FortranRule):
                 right_is_float = self._is_float_type(right_type)
 
                 if left_is_float and right_is_float:
+                    # Skip comparisons against PARAMETER constants (sentinel
+                    # values like UNDEFINED_FLOAT = -999.D0).  These are set
+                    # explicitly, not computed, so rounding is not a concern.
+                    if self._is_parameter_constant(left, scope, symbol_table, file_path):
+                        continue
+                    if self._is_parameter_constant(right, scope, symbol_table, file_path):
+                        continue
+
                     stmt_file_path = _get_source_file_path(rel_expr) or file_path
                     violations.append(
                         Violation(
@@ -103,6 +113,28 @@ class ComDataFloatCompare(FortranRule):
                     )
 
         return violations
+
+    @staticmethod
+    def _is_parameter_constant(
+        node,
+        scope,
+        symbol_table: ProjectSymbolTable,
+        file_path: str,
+    ) -> bool:
+        """Check if a node refers to a PARAMETER constant.
+
+        Comparisons against named PARAMETER constants (sentinel values
+        like ``UNDEFINED_FLOAT = -999.D0``) are safe — the value is set
+        explicitly, not computed, so rounding errors are not a concern.
+        """
+        names = walk(node, Name)
+        if not names:
+            return False
+        first_name = _node_to_str(names[0])
+        sym = symbol_table.get_symbol(first_name, scope.name, file_path)
+        if sym and sym.is_parameter:
+            return True
+        return False
 
     @staticmethod
     def _walk_with_lines(root, target_type):
@@ -157,6 +189,20 @@ class ComDataFloatCompare(FortranRule):
         if re.match(r"^\d*\.?\d+[dD]\d+$", s):
             return "DOUBLE PRECISION"
 
+        # Intrinsic function reference: Intrinsic_Function_Reference stores
+        # the intrinsic name as Intrinsic_Name (not Name), so walk(node, Name)
+        # only finds argument names.  Check Intrinsic_Name first.
+        if isinstance(node, Intrinsic_Function_Reference):
+            for child in node.children:
+                if isinstance(child, Intrinsic_Name):
+                    intr_name = str(child).lower()
+                    if intr_name in INTRINSIC_RETURN_TYPES:
+                        return INTRINSIC_RETURN_TYPES[intr_name]
+                    if intr_name in FORTRAN_INTRINSICS:
+                        return "UNKNOWN"
+                    break
+            # Fall through to symbol table lookup if intrinsic not recognized
+
         # Named variable or function call
         names = walk(node, Name)
         if not names:
@@ -164,7 +210,8 @@ class ComDataFloatCompare(FortranRule):
 
         first_name = _node_to_str(names[0])
 
-        # Check if it's an intrinsic function
+        # Check if it's an intrinsic function (for Part_Ref nodes that
+        # fparser couldn't classify as Intrinsic_Function_Reference)
         if first_name.lower() in INTRINSIC_RETURN_TYPES:
             return INTRINSIC_RETURN_TYPES[first_name.lower()]
 
