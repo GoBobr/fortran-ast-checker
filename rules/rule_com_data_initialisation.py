@@ -21,6 +21,8 @@ from fparser.two.Fortran2003 import (
     Assignment_Stmt,
     Call_Stmt,
     Data_Ref,
+    Data_Stmt,
+    Data_Implied_Do,
     Execution_Part,
     Function_Stmt,
     Function_Reference,
@@ -69,12 +71,84 @@ class ComDataInitialisation(FortranRule):
             initialized: Set[str] = set()
             self._collect_initialized(scope, symbol_table, initialized)
 
+            # Collect variables initialized via DATA statements (Fortran 77 style)
+            self._collect_data_stmt_initialized(ast, scope.name, initialized)
+
             # Walk execution statements in order, tracking reads before writes
             violations.extend(
                 self._check_data_flow(exec_part, scope, symbol_table, initialized, file_path)
             )
 
         return violations
+
+    @staticmethod
+    def _collect_data_stmt_initialized(
+        ast: Program,
+        scope_name: str,
+        initialized: Set[str],
+    ):
+        """Collect variables initialized via DATA statements.
+
+        Fortran 77 style: ``data a/2.871d-04, .../`` initializes variables
+        before the execution part begins.  We walk Data_Stmt nodes within
+        the scope's specification part and add the variable names.
+        """
+        from fparser.two.Fortran2003 import (
+            Function_Subprogram,
+            Main_Program,
+            Module,
+            Subroutine_Subprogram,
+        )
+
+        # Find the subprogram node for this scope
+        subprogram = None
+        for sub in walk(ast, Subroutine_Subprogram):
+            for child in sub.children:
+                if isinstance(child, Subroutine_Stmt):
+                    for c in child.children:
+                        if isinstance(c, Name) and _node_to_str(c) == scope_name:
+                            subprogram = sub
+                    break
+            if subprogram:
+                break
+
+        if subprogram is None:
+            for func in walk(ast, Function_Subprogram):
+                for child in func.children:
+                    if isinstance(child, Function_Stmt):
+                        for c in child.children:
+                            if isinstance(c, Name) and _node_to_str(c) == scope_name:
+                                subprogram = func
+                        break
+                if subprogram:
+                    break
+
+        if subprogram is None:
+            for main in walk(ast, Main_Program):
+                for child in main.children:
+                    if isinstance(child, Program_Stmt):
+                        for c in child.children:
+                            if isinstance(c, Name) and _node_to_str(c) == scope_name:
+                                subprogram = main
+                        break
+                if subprogram:
+                    break
+
+        if subprogram is None:
+            return
+
+        # Walk Data_Stmt nodes in the subprogram (they appear in spec part)
+        for data_stmt in walk(subprogram, Data_Stmt):
+            # Data_Stmt children: ['DATA', Data_Stmt_Set_List]
+            # Data_Stmt_Set_List contains Data_Stmt_Set nodes
+            # Data_Stmt_Set children: [Data_Object_List, '/', Data_Value_List, '/']
+            # Data_Object_List contains Name, Part_Ref, Data_Implied_Do, etc.
+            for name_node in walk(data_stmt, Name):
+                # Skip names inside Data_Implied_Do (loop variables)
+                # and names that are values (after the '/')
+                # Simple heuristic: collect all Name nodes that appear
+                # before the first '/' in the Data_Stmt_Set
+                initialized.add(_node_to_str(name_node).lower())
 
     def _collect_initialized(
         self,
@@ -99,6 +173,20 @@ class ComDataInitialisation(FortranRule):
             # Dummy arguments are initialized (passed in from caller)
             if sym.is_dummy:
                 initialized.add(name.lower())
+            # SAVE variables persist across calls; their state is preserved
+            # and they are typically guarded by allocation/status checks
+            if "SAVE" in sym.attributes:
+                initialized.add(name.lower())
+            # Variables of derived types with default-initialized components
+            # are considered initialized (e.g., type with `integer :: x = 1`)
+            if sym.type.startswith("TYPE("):
+                type_name = sym.type[5:-1].strip() if sym.type.endswith(")") else sym.type[5:].strip()
+                dt_components = symbol_table.get_derived_type_components(type_name)
+                if dt_components:
+                    for comp_sym in dt_components.values():
+                        if comp_sym.initialized:
+                            initialized.add(name.lower())
+                            break
 
     def _check_data_flow(
         self,
@@ -266,14 +354,38 @@ class ComDataInitialisation(FortranRule):
                     if ido_names:
                         # First name is the loop variable — it's a write
                         writes.add(_node_to_str(ido_names[0]))
-                # RHS reads (skip implied DO loop variables)
+                # Collect Name node IDs that are arguments to non-intrinsic
+                # function calls — these may be intent(out) and thus writes.
+                # fparser parses function calls as Part_Ref (can't distinguish
+                # from array access without declarations), so we handle both
+                # Function_Reference and Part_Ref nodes.
+                from fparser.two.Fortran2003 import Part_Ref, Section_Subscript_List
+
+                func_arg_ids: Set[int] = set()
+                # Function_Reference nodes
+                for func_ref in walk(rhs, Function_Reference):
+                    for arg_spec in walk(func_ref, Actual_Arg_Spec):
+                        for n in walk(arg_spec, Name):
+                            func_arg_ids.add(id(n))
+                # Part_Ref nodes (may be function calls)
+                for part_ref in walk(rhs, Part_Ref):
+                    children = list(part_ref.children)
+                    if len(children) >= 2 and isinstance(children[1], Section_Subscript_List):
+                        func_name = _node_to_str(children[0]).lower()
+                        # Skip if it's a known intrinsic (already handled)
+                        if func_name not in FORTRAN_INTRINSICS:
+                            for n in walk(children[1], Name):
+                                func_arg_ids.add(id(n))
+                for n in func_arg_ids:
+                    writes.add(_node_to_str(n))
+                # RHS reads (skip implied DO loop variables and func args)
                 implied_do_vars = set()
                 for ido in walk(rhs, Ac_Implied_Do_Control):
                     ido_names = walk(ido, Name)
                     if ido_names:
                         implied_do_vars.add(id(ido_names[0]))
                 for n in walk(rhs, Name):
-                    if id(n) not in skip_names and id(n) not in implied_do_vars:
+                    if id(n) not in skip_names and id(n) not in implied_do_vars and id(n) not in func_arg_ids:
                         reads.add(_node_to_str(n))
 
         elif isinstance(node, Pointer_Assignment_Stmt):
