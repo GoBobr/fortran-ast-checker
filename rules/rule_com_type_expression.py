@@ -47,7 +47,7 @@ class ComTypeExpression(FortranRule):
     """Check for mixed-type arithmetic expressions."""
 
     rule_key = "COM.TYPE.Expression"
-    severity = "CRITICAL"
+    severity = "MINOR"
 
     def check(
         self,
