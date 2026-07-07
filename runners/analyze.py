@@ -57,7 +57,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from fparser.two.parser import ParserFactory
 from fparser.common.readfortran import FortranFileReader
 
-from rules.symbol_table import ProjectSymbolTable, _read_fortran_file
+from rules.symbol_table import ProjectSymbolTable, _read_fortran_file, _get_source_file_path
 from rules.base_rule import Violation
 from rules.rule_f90_data_declaration import F90DataDeclaration
 from rules.rule_com_type_expression import ComTypeExpression
@@ -205,6 +205,18 @@ def run_analysis(
             for rule in rules:
                 try:
                     v = rule.check(ast, rel_path, symbol_table)
+                    # Normalize violation file paths: if a rule reported a
+                    # violation in an included file, make the path
+                    # relative to the source directory.
+                    for violation in v:
+                        if violation.file_path and os.path.isabs(
+                            violation.file_path
+                        ):
+                            violation.file_path = os.path.relpath(
+                                violation.file_path, source_dir
+                            )
+                        elif not violation.file_path:
+                            violation.file_path = rel_path
                     all_violations.extend(v)
                 except Exception as e:
                     logger.warning(

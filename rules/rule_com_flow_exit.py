@@ -35,7 +35,12 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line, _node_to_str
+from rules.symbol_table import (
+    ProjectSymbolTable,
+    _get_line,
+    _get_source_file_path,
+    _node_to_str,
+)
 
 
 class ComFlowExit(FortranRule):
@@ -138,12 +143,13 @@ class ComFlowExit(FortranRule):
             # Skip if this RETURN is inside an IF block (error handling)
             if self._is_error_handling_return(ret_node, exec_part):
                 continue
+            stmt_file_path = _get_source_file_path(ret_node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message=f"Multiple exit points in '{scope_name}'. "
                     f"Use a single exit point.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=ret_line,
                     severity=self.severity,
                 )

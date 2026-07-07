@@ -47,6 +47,7 @@ from rules.symbol_table import (
     FORTRAN_KEYWORDS,
     ProjectSymbolTable,
     _get_line,
+    _get_source_file_path,
     _node_to_str,
 )
 
@@ -84,11 +85,14 @@ class F90DataDeclaration(FortranRule):
                 if not parent_has_in:
                     # Find the line of the scope's declaration statement
                     line = self._find_scope_line(ast, scope.name)
+                    scope_file_path = _get_source_file_path(
+                        self._find_scope_node(ast, scope.name)
+                    ) or file_path
                     violations.append(
                         Violation(
                             rule_key=self.rule_key,
                             message=f"IMPLICIT NONE is mandatory in {scope.kind} '{scope.name}'.",
-                            file_path=file_path,
+                            file_path=scope_file_path,
                             line=line,
                             severity=self.severity,
                         )
@@ -147,11 +151,13 @@ class F90DataDeclaration(FortranRule):
                     continue
 
                 # Not declared — flag it
+                # Use the real source file for the enclosing statement (handles INCLUDE)
+                name_file_path = _get_source_file_path(name_node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message=f"The variable '{name}' must be declared.",
-                        file_path=file_path,
+                        file_path=name_file_path,
                         line=line,
                         severity=self.severity,
                     )
@@ -347,3 +353,19 @@ class F90DataDeclaration(FortranRule):
                 if isinstance(child, Name) and _node_to_str(child) == scope_name:
                     return _get_line(node)
         return 1
+
+    @staticmethod
+    def _find_scope_node(ast: Program, scope_name: str):
+        """Find the AST node of a scope's declaration statement."""
+        from fparser.two.Fortran2003 import (
+            Function_Stmt,
+            Module_Stmt,
+            Program_Stmt,
+            Subroutine_Stmt,
+        )
+
+        for node in walk(ast, (Subroutine_Stmt, Function_Stmt, Program_Stmt, Module_Stmt)):
+            for child in node.children:
+                if isinstance(child, Name) and _node_to_str(child) == scope_name:
+                    return node
+        return None

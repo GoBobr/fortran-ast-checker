@@ -32,7 +32,12 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line, _node_to_str
+from rules.symbol_table import (
+    ProjectSymbolTable,
+    _get_line,
+    _get_source_file_path,
+    _node_to_str,
+)
 
 
 class F90ErrOpenRead(FortranRule):
@@ -53,11 +58,12 @@ class F90ErrOpenRead(FortranRule):
         for node in walk(ast, Open_Stmt):
             if not self._has_iostat_or_err_open(node):
                 line = _get_line(node)
+                stmt_file_path = _get_source_file_path(node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="There is no parameter IOSTAT in the OPEN instruction.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )
@@ -69,11 +75,12 @@ class F90ErrOpenRead(FortranRule):
                 continue
             if not self._has_iostat_or_err_read(node):
                 line = _get_line(node)
+                stmt_file_path = _get_source_file_path(node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="There is no parameter IOSTAT in the READ instruction.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )
@@ -83,11 +90,12 @@ class F90ErrOpenRead(FortranRule):
         for node in walk(ast, Close_Stmt):
             if not self._has_iostat_or_err_close(node):
                 line = _get_line(node)
+                stmt_file_path = _get_source_file_path(node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="There is no parameter IOSTAT in the CLOSE instruction.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )

@@ -25,7 +25,7 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line
+from rules.symbol_table import ProjectSymbolTable, _get_line, _get_source_file_path
 
 
 class F90ErrAllocate(FortranRule):
@@ -45,11 +45,12 @@ class F90ErrAllocate(FortranRule):
         for node in walk(ast, Allocate_Stmt):
             if not self._has_stat(node):
                 line = _get_line(node)
+                stmt_file_path = _get_source_file_path(node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="There is no parameter STAT in the ALLOCATE instruction.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )
@@ -58,11 +59,12 @@ class F90ErrAllocate(FortranRule):
         for node in walk(ast, Deallocate_Stmt):
             if not self._has_stat_dealloc(node):
                 line = _get_line(node)
+                stmt_file_path = _get_source_file_path(node) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="There is no parameter STAT in the DEALLOCATE instruction.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )

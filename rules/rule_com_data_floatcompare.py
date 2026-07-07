@@ -31,6 +31,7 @@ from rules.symbol_table import (
     INTRINSIC_RETURN_TYPES,
     ProjectSymbolTable,
     _get_line,
+    _get_source_file_path,
     _node_to_str,
 )
 
@@ -90,11 +91,12 @@ class ComDataFloatCompare(FortranRule):
                 right_is_float = self._is_float_type(right_type)
 
                 if left_is_float and right_is_float:
+                    stmt_file_path = _get_source_file_path(rel_expr) or file_path
                     violations.append(
                         Violation(
                             rule_key=self.rule_key,
                             message=f"Floating point comparison with {op_str}.",
-                            file_path=file_path,
+                            file_path=stmt_file_path,
                             line=line,
                             severity=self.severity,
                         )

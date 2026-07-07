@@ -666,6 +666,47 @@ def _get_line(node) -> int:
     return 0
 
 
+def _get_source_file_path(node) -> str:
+    """Get the real source file path for an fparser AST node.
+
+    When a file uses ``INCLUDE`` statements, fparser inlines the
+    included content.  The statement's ``item.reader`` object still
+    points to the file that originally contained the statement, so
+    we can use it to report violations in the correct implementation
+    file instead of the including module file.
+
+    Returns an empty string if the source file cannot be determined.
+    """
+    if node is None:
+        return ""
+    item = getattr(node, "item", None)
+    if item is None:
+        # Walk up the tree looking for an ancestor with source info
+        parent = getattr(node, "parent", None)
+        while parent is not None:
+            item = getattr(parent, "item", None)
+            if item is not None:
+                break
+            parent = getattr(parent, "parent", None)
+    if item is None:
+        return ""
+    reader = getattr(item, "reader", None)
+    if reader is None:
+        return ""
+    # FortranFileReader exposes the open file object via .file;
+    # the file object has the real path in .name.
+    file_obj = getattr(reader, "file", None)
+    if file_obj is not None:
+        path = getattr(file_obj, "name", "")
+        if path:
+            return path
+    # Fallback: some readers store the path directly in .name
+    name = getattr(reader, "name", "")
+    if isinstance(name, str):
+        return name
+    return ""
+
+
 def _node_to_str(node) -> str:
     """Safely convert an fparser node to string."""
     if node is None:

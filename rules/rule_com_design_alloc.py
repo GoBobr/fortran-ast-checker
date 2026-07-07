@@ -28,7 +28,12 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line, _node_to_str
+from rules.symbol_table import (
+    ProjectSymbolTable,
+    _get_line,
+    _get_source_file_path,
+    _node_to_str,
+)
 
 
 class ComDesignAlloc(FortranRule):
@@ -99,12 +104,13 @@ class ComDesignAlloc(FortranRule):
                     ):
                         continue
 
+                    stmt_file_path = _get_source_file_path(alloc_node) or file_path
                     violations.append(
                         Violation(
                             rule_key=self.rule_key,
                             message=f"Variable '{base_var}' is allocated but "
                             f"never deallocated.",
-                            file_path=file_path,
+                            file_path=stmt_file_path,
                             line=line if line else 0,
                             severity=self.severity,
                         )

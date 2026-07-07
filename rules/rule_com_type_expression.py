@@ -38,6 +38,7 @@ from rules.symbol_table import (
     INTRINSIC_RETURN_TYPES,
     ProjectSymbolTable,
     _get_line,
+    _get_source_file_path,
     _node_to_str,
 )
 
@@ -76,15 +77,20 @@ class ComTypeExpression(FortranRule):
                     continue
 
                 rhs = children[2]
+                stmt_file_path = _get_source_file_path(assign) or file_path
 
                 # Check for mixed-type in Level_2_Expr (arithmetic +, -, etc.)
                 for expr in walk(rhs, Level_2_Expr):
-                    v = self._check_mixed_type(expr, scope, symbol_table, file_path, line)
+                    v = self._check_mixed_type(
+                        expr, scope, symbol_table, stmt_file_path, line
+                    )
                     violations.extend(v)
 
                 # Also check Add_Operand (multiplication, division)
                 for expr in walk(rhs, Add_Operand):
-                    v = self._check_mixed_type(expr, scope, symbol_table, file_path, line)
+                    v = self._check_mixed_type(
+                        expr, scope, symbol_table, stmt_file_path, line
+                    )
                     violations.extend(v)
 
         return violations

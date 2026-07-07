@@ -39,7 +39,12 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line, _node_to_str
+from rules.symbol_table import (
+    ProjectSymbolTable,
+    _get_line,
+    _get_source_file_path,
+    _node_to_str,
+)
 
 
 class F90DesignObsolete(FortranRule):
@@ -59,11 +64,12 @@ class F90DesignObsolete(FortranRule):
         # 1. Arithmetic IF statement: IF (expr) label1, label2, label3
         for node in walk(ast, Arithmetic_If_Stmt):
             line = _get_line(node)
+            stmt_file_path = _get_source_file_path(node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message="Obsolete Fortran feature: arithmetic IF statement.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=line if line else 0,
                     severity=self.severity,
                 )
@@ -72,11 +78,12 @@ class F90DesignObsolete(FortranRule):
         # 2. Computed GO TO: GO TO (label1, label2, ...) [,] expr
         for node in walk(ast, Computed_Goto_Stmt):
             line = _get_line(node)
+            stmt_file_path = _get_source_file_path(node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message="Obsolete Fortran feature: computed GO TO statement.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=line if line else 0,
                     severity=self.severity,
                 )
@@ -95,11 +102,12 @@ class F90DesignObsolete(FortranRule):
                 names = walk(node, Name)
                 if names:
                     line = _get_line(node)
+                    stmt_file_path = _get_source_file_path(node) or file_path
                     violations.append(
                         Violation(
                             rule_key=self.rule_key,
                             message="Obsolete Fortran feature: assigned GO TO statement.",
-                            file_path=file_path,
+                            file_path=stmt_file_path,
                             line=line if line else 0,
                             severity=self.severity,
                         )
@@ -108,11 +116,12 @@ class F90DesignObsolete(FortranRule):
         # 4. ENTRY statement
         for node in walk(ast, Entry_Stmt):
             line = _get_line(node)
+            stmt_file_path = _get_source_file_path(node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message="Obsolete Fortran feature: ENTRY statement.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=line if line else 0,
                     severity=self.severity,
                 )
@@ -121,11 +130,12 @@ class F90DesignObsolete(FortranRule):
         # 5. Nonblock DO construct (old-style DO with label)
         for node in walk(ast, Nonblock_Do_Construct):
             line = _get_line(node)
+            stmt_file_path = _get_source_file_path(node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message="Obsolete Fortran feature: nonblock DO construct.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=line if line else 0,
                     severity=self.severity,
                 )
@@ -134,11 +144,12 @@ class F90DesignObsolete(FortranRule):
         # 6. CONTINUE statement (used as DO loop terminator in old code)
         for node in walk(ast, Continue_Stmt):
             line = _get_line(node)
+            stmt_file_path = _get_source_file_path(node) or file_path
             violations.append(
                 Violation(
                     rule_key=self.rule_key,
                     message="Obsolete Fortran feature: CONTINUE statement.",
-                    file_path=file_path,
+                    file_path=stmt_file_path,
                     line=line if line else 0,
                     severity=self.severity,
                 )
@@ -178,11 +189,12 @@ class F90DesignObsolete(FortranRule):
 
             if var_type and self._is_float_type(var_type):
                 line = _get_line(do_stmt)
+                stmt_file_path = _get_source_file_path(do_stmt) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message=f"Obsolete Fortran feature: real DO loop variable '{loop_var}'.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line if line else 0,
                         severity=self.severity,
                     )
@@ -200,11 +212,12 @@ class F90DesignObsolete(FortranRule):
 
             if var_type and self._is_float_type(var_type):
                 line = _get_line(do_stmt)
+                stmt_file_path = _get_source_file_path(do_stmt) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message=f"Obsolete Fortran feature: real DO loop variable '{loop_var}'.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line if line else 0,
                         severity=self.severity,
                     )
@@ -271,11 +284,12 @@ class F90DesignObsolete(FortranRule):
             # The old syntax is: CHARACTER*10 :: x  or  CHARACTER*10 x
             if re.match(r"CHARACTER\s*\*\s*\d", s, re.IGNORECASE):
                 line = _get_line(tds)
+                stmt_file_path = _get_source_file_path(tds) or file_path
                 violations.append(
                     Violation(
                         rule_key=self.rule_key,
                         message="Obsolete Fortran feature: CHARACTER*N declaration syntax.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line if line else 0,
                         severity=self.severity,
                     )

@@ -40,6 +40,7 @@ from rules.symbol_table import (
     FORTRAN_KEYWORDS,
     ProjectSymbolTable,
     _get_line,
+    _get_source_file_path,
     _node_to_str,
 )
 
@@ -270,6 +271,9 @@ class ComDataInitialisation(FortranRule):
             # Determine which variables are written and read in this statement
             writes, reads = self._get_writes_reads(node, skip_names)
 
+            # Determine the real source file for this statement (handles INCLUDE)
+            stmt_file_path = _get_source_file_path(node) or file_path
+
             # First, check reads: any read variable not in initialized is a violation
             for name in reads:
                 name_lower = name.lower()
@@ -302,7 +306,7 @@ class ComDataInitialisation(FortranRule):
                     Violation(
                         rule_key=self.rule_key,
                         message=f"The variable '{name}' is used before being initialized.",
-                        file_path=file_path,
+                        file_path=stmt_file_path,
                         line=line,
                         severity=self.severity,
                     )

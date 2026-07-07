@@ -25,7 +25,12 @@ from fparser.two.Fortran2003 import (
 from fparser.two.utils import walk
 
 from rules.base_rule import FortranRule, Violation
-from rules.symbol_table import ProjectSymbolTable, _get_line, _node_to_str
+from rules.symbol_table import (
+    ProjectSymbolTable,
+    _get_line,
+    _get_source_file_path,
+    _node_to_str,
+)
 
 
 class F90DataArrayAccess(FortranRule):
@@ -67,11 +72,12 @@ class F90DataArrayAccess(FortranRule):
                         # (only detectable for compile-time constants)
                         if self._has_repeated_values(subscript):
                             line = _get_line(node)
+                            stmt_file_path = _get_source_file_path(node) or file_path
                             violations.append(
                                 Violation(
                                     rule_key=self.rule_key,
                                     message="No duplicate items in array of indirections.",
-                                    file_path=file_path,
+                                    file_path=stmt_file_path,
                                     line=line,
                                     severity=self.severity,
                                 )
