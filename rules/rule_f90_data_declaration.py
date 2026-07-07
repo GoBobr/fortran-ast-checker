@@ -28,9 +28,12 @@ from fparser.two.Fortran2003 import (
     If_Stmt,
     Name,
     Part_Ref,
+    Proc_Component_Ref,
+    Procedure_Designator,
     Program,
     Program_Stmt,
     Subroutine_Stmt,
+    Type_Name,
 )
 from fparser.two.utils import walk
 
@@ -189,6 +192,30 @@ class F90DataDeclaration(FortranRule):
                 # Rest are components — skip them
                 for n in names[1:]:
                     skip.add(id(n))
+
+        # 1b. Skip type-bound procedure names in Procedure_Designator (obj%method)
+        for proc_desig in walk(exec_part, Procedure_Designator):
+            names = walk(proc_desig, Name)
+            if names:
+                # First name is the base variable — keep it
+                # Second name is the method — skip it
+                for n in names[1:]:
+                    skip.add(id(n))
+
+        # 1c. Skip component names in Proc_Component_Ref (compare(obj%comp, ...))
+        # Proc_Component_Ref has children [Name(base), '%', Name(component)]
+        for pcr in walk(exec_part, Proc_Component_Ref):
+            names = walk(pcr, Name)
+            if names:
+                # First name is the base variable — keep it
+                # Rest are components — skip them
+                for n in names[1:]:
+                    skip.add(id(n))
+
+        # 1d. Skip Type_Name in Structure_Constructor (compare(...) parsed as
+        # Structure_Constructor with Type_Name 'compare')
+        for tn in walk(exec_part, Type_Name):
+            skip.add(id(tn))
 
         # 2. Skip keyword argument names in Actual_Arg_Spec (keyword=value)
         for arg_spec in walk(exec_part, Actual_Arg_Spec):

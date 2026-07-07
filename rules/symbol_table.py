@@ -60,6 +60,8 @@ from fparser.two.Fortran2003 import (
     Name,
     Only_List,
     Pointer_Assignment_Stmt,
+    Proc_Decl_List,
+    Procedure_Declaration_Stmt,
     Program,
     Program_Stmt,
     Return_Stmt,
@@ -200,6 +202,27 @@ INTRINSIC_RETURN_TYPES: Dict[str, str] = {
     "dnint": "DOUBLE PRECISION",
     "dgamma": "DOUBLE PRECISION",
     "dlgama": "DOUBLE PRECISION",
+    # Additional Fortran77-style intrinsics (D/C prefix)
+    "derfc": "DOUBLE PRECISION",
+    "derf": "DOUBLE PRECISION",
+    "dconjg": "COMPLEX",
+    "cdsqrt": "COMPLEX",
+    "cdabs": "DOUBLE PRECISION",
+    "cdexp": "COMPLEX",
+    "cdlog": "COMPLEX",
+    "cdcos": "COMPLEX",
+    "cdsin": "COMPLEX",
+    # Standard intrinsics not yet listed
+    "erfc": "REAL",
+    "erf": "REAL",
+    "gamma": "REAL",
+    "algama": "DOUBLE PRECISION",
+    "bessel_j0": "REAL",
+    "bessel_j1": "REAL",
+    "bessel_jn": "REAL",
+    "bessel_y0": "REAL",
+    "bessel_y1": "REAL",
+    "bessel_yn": "REAL",
     # Complex-returning intrinsics
     "cmplx": "COMPLEX",
     "dcmplx": "COMPLEX",
@@ -467,6 +490,59 @@ FORTRAN_INTRINSICS: Set[str] = set(INTRINSIC_RETURN_TYPES.keys()) | {
     "h5aread_f",
     "h5aopen_name_f",
     "h5aclose_f",
+    # NetCDF constants (from USE netcdf module)
+    "nf90_float",
+    "nf90_double",
+    "nf90_int",
+    "nf90_int1",
+    "nf90_int2",
+    "nf90_int4",
+    "nf90_int8",
+    "nf90_real",
+    "nf90_real4",
+    "nf90_real8",
+    "nf90_char",
+    "nf90_byte",
+    "nf90_short",
+    "nf90_ubyte",
+    "nf90_ushort",
+    "nf90_uint",
+    "nf90_int64",
+    "nf90_uint64",
+    "nf90_string",
+    "nf90_noerr",
+    "nf90_nowrite",
+    "nf90_write",
+    "nf90_clobber",
+    "nf90_noclobber",
+    "nf90_fill",
+    "nf90_nofill",
+    "nf90_global",
+    "nf90_max_name",
+    "nf90_max_var_dims",
+    "nf90_unlimited",
+    "nf90_64bit_offset",
+    "nf90_classic_model",
+    "nf90_netcdf4",
+    "nf90_enogrp",
+    "nf90_inq_grp_ncid",
+    "nf90_inq_path",
+    "nf90_def_grp",
+    "nf90_compound",
+    "nf90_enum",
+    "nf90_vlen",
+    "nf90_opaque",
+    # libtorch (PyTorch Fortran bindings)
+    "torch_tensor_from_array",
+    "torch_kcpu",
+    "torch_kcuda",
+    "torch_module_load",
+    "torch_module_forward",
+    "torch_tensor_to_array",
+    "torch_tensor_from_blob",
+    "torch_tensor_to_blob",
+    "torch_init",
+    "torch_finish",
 }
 
 
@@ -899,6 +975,78 @@ class ProjectSymbolTable:
         """Process a Specification_Part to extract declarations."""
         for node in walk(spec_part, Type_Declaration_Stmt):
             self._process_type_declaration(node, mod_info.exports, scope_name)
+        # Also process PROCEDURE declarations (procedure pointers)
+        for node in walk(spec_part, Procedure_Declaration_Stmt):
+            self._process_procedure_declaration(node, mod_info.exports, scope_name)
+
+    def _process_procedure_declaration(
+        self,
+        node: Procedure_Declaration_Stmt,
+        symbols: Dict[str, Symbol],
+        scope_name: str,
+    ):
+        """Process a Procedure_Declaration_Stmt and add symbols to the dict.
+
+        These are procedure pointers like:
+            PROCEDURE(iface), POINTER :: proc_name
+
+        children: [Name (interface), Proc_Attr_Spec_List, Proc_Decl_List]
+        """
+        children = list(node.children)
+        if len(children) < 3:
+            return
+
+        interface_name = _node_to_str(children[0]) if isinstance(children[0], Name) else ""
+        attr_list = children[1]
+        proc_decl_list = children[2]
+
+        # Parse attributes
+        attrs: List[str] = []
+        is_pointer = False
+        is_public = False
+        if attr_list and hasattr(attr_list, "children"):
+            for attr in attr_list.children:
+                attr_str = str(attr).upper().strip()
+                attrs.append(attr_str)
+                if attr_str == "POINTER":
+                    is_pointer = True
+                if attr_str == "PUBLIC":
+                    is_public = True
+
+        # Parse procedure declaration names
+        if isinstance(proc_decl_list, Proc_Decl_List):
+            for proc_decl in proc_decl_list.children:
+                # Proc_Decl children: [Name, ...] — first child is the name
+                proc_name = ""
+                has_init = False
+                if hasattr(proc_decl, "children"):
+                    for c in proc_decl.children:
+                        if isinstance(c, Name):
+                            proc_name = _node_to_str(c)
+                            break
+                else:
+                    proc_name = str(proc_decl).split("=")[0].strip()
+
+                if proc_name:
+                    sym = Symbol(
+                        name=proc_name,
+                        type=f"PROCEDURE({interface_name})",
+                        attributes=attrs.copy(),
+                        scope=scope_name,
+                        is_public=is_public,
+                        initialized=False,
+                        is_dummy=False,
+                        intent="",
+                        is_allocatable=False,
+                        is_pointer=is_pointer,
+                        is_parameter=False,
+                        is_target=False,
+                        is_optional=False,
+                        is_external=False,
+                        is_intrinsic=False,
+                        dimensions=0,
+                    )
+                    symbols[proc_name] = sym
 
     def _process_type_declaration(
         self,
@@ -990,6 +1138,9 @@ class ProjectSymbolTable:
                 # NOT Type_Declaration_Stmt (they share a common base but are separate classes)
                 for tds in walk(child, Data_Component_Def_Stmt):
                     self._process_type_declaration(tds, components, type_name)
+                # Also process procedure components (procedure pointers in derived types)
+                for pds in walk(child, Procedure_Declaration_Stmt):
+                    self._process_procedure_declaration(pds, components, type_name)
 
         mod_info.derived_types[type_name] = components
 
@@ -1116,6 +1267,8 @@ class ProjectSymbolTable:
                         # Process declarations
                         for tds in walk(child, Type_Declaration_Stmt):
                             self._process_type_declaration(tds, scope.symbols, sub_name)
+                        for pds in walk(child, Procedure_Declaration_Stmt):
+                            self._process_procedure_declaration(pds, scope.symbols, sub_name)
                 break
 
         # Mark dummy args
@@ -1165,6 +1318,8 @@ class ProjectSymbolTable:
                                 scope.use_imports[mod_name] = only_list
                         for tds in walk(child, Type_Declaration_Stmt):
                             self._process_type_declaration(tds, scope.symbols, func_name)
+                        for pds in walk(child, Procedure_Declaration_Stmt):
+                            self._process_procedure_declaration(pds, scope.symbols, func_name)
                 break
 
         for arg in dummy_args:
@@ -1207,6 +1362,8 @@ class ProjectSymbolTable:
                                 scope.use_imports[mod_name] = only_list
                         for tds in walk(child, Type_Declaration_Stmt):
                             self._process_type_declaration(tds, scope.symbols, prog_name)
+                        for pds in walk(child, Procedure_Declaration_Stmt):
+                            self._process_procedure_declaration(pds, scope.symbols, prog_name)
                 break
 
         self.scopes[scope_key] = scope

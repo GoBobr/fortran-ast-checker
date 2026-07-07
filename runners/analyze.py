@@ -97,6 +97,36 @@ def find_f90_files(source_dir: str) -> List[str]:
     return sorted(files)
 
 
+def find_included_files(source_dir: str) -> set:
+    """Find all .f90 files that are INCLUDE targets of other .f90 files.
+
+    These files are included into parent modules via INCLUDE statements,
+    so their code is already analyzed via the parent module.  Skipping
+    them avoids false positives for variables defined in the parent
+    module (e.g., ``nst`` parameter in lintran_nst3_module).
+    """
+    import re
+
+    included = set()
+    include_re = re.compile(r'^\s*INCLUDE\s+"([^"]+)"', re.IGNORECASE)
+
+    for root, dirs, filenames in os.walk(source_dir):
+        for fname in filenames:
+            if not fname.endswith(".f90"):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        m = include_re.match(line)
+                        if m:
+                            included.add(m.group(1))
+            except Exception:
+                pass
+
+    return included
+
+
 def select_rules(rule_keys: str | None):
     """Select rules by comma-separated keys, or return all if None."""
     if not rule_keys:
@@ -131,6 +161,14 @@ def run_analysis(
     f90_files = find_f90_files(source_dir)
     print(f"Found {len(f90_files)} .f90 files in {source_dir}")
 
+    # Step 1b: Find files that are INCLUDE targets — skip them during
+    # rule checking because their code is already analyzed via the
+    # parent module that includes them.
+    included_filenames = find_included_files(source_dir)
+    if included_filenames:
+        print(f"  Skipping {len(included_filenames)} INCLUDE-target files: "
+              f"{', '.join(sorted(included_filenames))}")
+
     # Step 2: Build symbol table
     print("Building project-wide symbol table...")
     t0 = time.time()
@@ -155,6 +193,12 @@ def run_analysis(
     t0 = time.time()
     for i, fpath in enumerate(f90_files):
         rel_path = os.path.relpath(fpath, source_dir)
+        fname = os.path.basename(fpath)
+
+        # Skip INCLUDE-target files — already analyzed via parent module
+        if fname in included_filenames:
+            continue
+
         try:
             reader = FortranFileReader(fpath)
             ast = parser(reader)

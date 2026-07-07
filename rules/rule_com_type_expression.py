@@ -131,6 +131,11 @@ class ComTypeExpression(FortranRule):
         if not left_type or not right_type:
             return violations
 
+        # Skip if either operand type is UNKNOWN (e.g., intrinsic with
+        # unknown return type, or function not in symbol table)
+        if left_type == "UNKNOWN" or right_type == "UNKNOWN":
+            return violations
+
         # Normalize types
         left_norm = self._normalize_type(left_type)
         right_norm = self._normalize_type(right_type)
