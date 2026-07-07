@@ -24,6 +24,7 @@ from fparser.two.Fortran2003 import (
     Association,
     Association_List,
     Call_Stmt,
+    Component_Spec,
     Data_Pointer_Object,
     Data_Ref,
     Execution_Part,
@@ -253,6 +254,15 @@ class F90DataDeclaration(FortranRule):
         for arg_spec in walk(exec_part, Actual_Arg_Spec):
             # Actual_Arg_Spec children: [Name(keyword), '=', expr]
             children = list(arg_spec.children)
+            if children and isinstance(children[0], Name):
+                skip.add(id(children[0]))
+
+        # 2b. Skip keyword argument names in Component_Spec (keyword=value)
+        # fparser parses derived-type constructors like nf90_create(cmode=...)
+        # as Structure_Constructor with Component_Spec children instead of
+        # Actual_Arg_Spec.
+        for comp_spec in walk(exec_part, Component_Spec):
+            children = list(comp_spec.children)
             if children and isinstance(children[0], Name):
                 skip.add(id(children[0]))
 
