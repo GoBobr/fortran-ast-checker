@@ -110,6 +110,11 @@ def _read_fortran_file(fpath: str, parser):
             source = f.read()
         source = _preprocess_fortran_source(source)
         reader = FortranStringReader(source, ignore_comments=False)
+        # FortranStringReader.source defaults to a StringIO object, so
+        # reader.name returns "<_io.StringIO object at 0x...>".  Set
+        # .source to the file path so that _get_source_file_path() can
+        # recover the real file name for violation reporting.
+        reader.source = fpath
         return parser(reader)
 
 
@@ -698,13 +703,29 @@ def _get_source_file_path(node) -> str:
     file_obj = getattr(reader, "file", None)
     if file_obj is not None:
         path = getattr(file_obj, "name", "")
-        if path:
+        if path and _is_valid_file_path(path):
             return path
     # Fallback: some readers store the path directly in .name
     name = getattr(reader, "name", "")
-    if isinstance(name, str):
+    if isinstance(name, str) and _is_valid_file_path(name):
         return name
     return ""
+
+
+def _is_valid_file_path(path: str) -> bool:
+    """Check whether a string looks like a real file path.
+
+    FortranStringReader.name returns strings like
+    ``"<_io.StringIO object at 0x7c1f63e23400> mode=free"`` when
+    the source is a StringIO object.  These should not be treated
+    as valid file paths.
+    """
+    if not path:
+        return False
+    # StringIO repr and similar Python object reprs start with '<'
+    if path.startswith("<") or path.startswith("_io."):
+        return False
+    return True
 
 
 def _node_to_str(node) -> str:
