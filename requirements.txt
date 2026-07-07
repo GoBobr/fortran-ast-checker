@@ -1,2 +1,5 @@
 # fparser from EUM fork (includes unary minus after */ fix)
+# For development, install from local checkout:
+#   pip install -e ../fparser
+# For CI/deployment:
 fparser @ git+https://github.com/GoBobr/fparser.git@eum-fortran

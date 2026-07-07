@@ -6,7 +6,7 @@ Each test verifies that:
 2. The ``error.f90`` file produces ≥1 violations
 
 Usage:
-    cd /tcenas2/CO2M/user/co2m/dev/fparser-poc
+    cd /tcenas2/CO2M/user/co2m/dev/fortran-ast-checker
     source venv/bin/activate
     python3 -m pytest tests/test_rules.py -v
 """

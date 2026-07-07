@@ -82,7 +82,7 @@ This PoC replaces the JFlex-lexer-based i-CodeCNES rules with fparser AST visito
 
 ```bash
 # Activate venv
-cd /tcenas2/CO2M/user/co2m/dev/fparser-poc
+cd /tcenas2/CO2M/user/co2m/dev/fortran-ast-checker
 source venv/bin/activate
 
 # Run tests
