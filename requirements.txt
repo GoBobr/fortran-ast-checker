@@ -1,0 +1,2 @@
+# fparser from EUM fork (includes unary minus after */ fix)
+fparser @ git+https://github.com/GoBobr/fparser.git@eum-fortran

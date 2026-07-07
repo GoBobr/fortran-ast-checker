@@ -73,62 +73,6 @@ from fparser.two.Fortran2003 import (
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import walk
 
-# ---------------------------------------------------------------------------
-# fparser monkey-patches: unary minus after multiplication/division
-# ---------------------------------------------------------------------------
-# fparser 0.2.4 cannot parse unary minus directly after a binary ``*`` or
-# ``/`` operator (e.g. ``a * -b`` or ``a + d * -c``).  The Fortran standard
-# permits this — the ``-`` is a level-2 unary expression — but fparser has
-# two limitations:
-#
-# 1. ``Mult_Operand`` only accepts ``Level_1_Expr`` as a subclass, so it
-#    cannot match ``-b`` as a right-hand operand of ``*``.
-#    Fix: add ``Level_2_Unary_Expr`` to ``Mult_Operand.subclass_names``.
-#
-# 2. ``Level_2_Expr.match`` uses ``BinaryOpBase.match`` which splits the
-#    expression string at every ``[+-]`` occurrence.  In ``a + d * -b`` the
-#    rightmost ``-`` (the unary minus) is treated as a binary subtraction
-#    operator, causing the split ``lhs="a + d *"``, ``rhs="b"`` — which
-#    fails because ``a + d *`` is not a valid expression.
-#    Fix: override ``Level_2_Expr.match`` to rewrite ``*-`` / ``/-`` as
-#    ``*(-1)*`` / ``/(-1)/`` before calling the original match.  This is
-#    mathematically equivalent and only affects the internal string
-#    representation, not the AST semantics.
-from fparser.two import pattern_tools as _pattern
-from fparser.two.Fortran2003 import (
-    Add_Operand as _Add_Operand,
-    Level_2_Expr as _Level_2_Expr,
-    Mult_Operand as _Mult_Operand,
-)
-from fparser.two.utils import BinaryOpBase as _BinaryOpBase
-
-# Patch 1: allow Mult_Operand to accept unary expressions
-if "Level_2_Unary_Expr" not in _Mult_Operand.subclass_names:
-    _Mult_Operand.subclass_names = list(_Mult_Operand.subclass_names) + [
-        "Level_2_Unary_Expr"
-    ]
-
-# Patch 2: rewrite *- /- in Level_2_Expr.match before splitting
-_PP_UNARY_MINUS_MUL_RE = re.compile(r"(?<!\*)\*\s*-\s*")
-_PP_UNARY_MINUS_DIV_RE = re.compile(r"(?<!\*)/\s*-\s*")
-_original_l2_match = _Level_2_Expr.match
-
-
-@staticmethod
-def _patched_l2_match(string):
-    if _PP_UNARY_MINUS_MUL_RE.search(string) or _PP_UNARY_MINUS_DIV_RE.search(string):
-        fixed = _PP_UNARY_MINUS_MUL_RE.sub("*(-1)*", string)
-        fixed = _PP_UNARY_MINUS_DIV_RE.sub("/(-1)/", fixed)
-        result = _BinaryOpBase.match(
-            _Level_2_Expr, _pattern.add_op.named(), _Add_Operand, fixed
-        )
-        if result is not None:
-            return result
-    return _original_l2_match(string)
-
-
-_Level_2_Expr.match = _patched_l2_match
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

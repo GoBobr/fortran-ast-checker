@@ -1,6 +1,8 @@
 # fortran-ast-checker
 
-Fortran static analysis tool using [fparser](https://github.com/stfc/fparser) AST — replaces JFlex-lexer-based i-CodeCNES rules with AST visitors for dramatically fewer false positives.
+Fortran static analysis tool using [fparser](https://github.com/GoBobr/fparser/tree/eum-fortran) AST — replaces JFlex-lexer-based i-CodeCNES rules with AST visitors for dramatically fewer false positives.
+
+> **Note:** This project uses the [EUM fork of fparser](https://github.com/GoBobr/fparser/tree/eum-fortran) (`eum-fortran` branch), which includes a fix for parsing unary minus after `*`/`/` operators. See `requirements.txt`.
 
 ## Overview
 
