@@ -375,6 +375,13 @@ class ComDataInitialisation(FortranRule):
         # Build a set of Name node IDs to skip (components, keyword args, proc names)
         skip_names = self._collect_skip_names(exec_part)
 
+        # Pre-collect all writes inside DO loop bodies.
+        # This handles loop-carried dependencies: a variable written later
+        # in a loop body (e.g., via a CALL with INTENT(OUT)) is visible on
+        # the next iteration to reads that appear earlier in the loop body.
+        # Without this pre-pass, such reads would be falsely flagged.
+        self._collect_loop_carried_writes(exec_part, initialized, skip_names)
+
         # Process statements in order
         for line, node in stmt_nodes:
             # Determine which variables are written and read in this statement
@@ -453,6 +460,82 @@ class ComDataInitialisation(FortranRule):
         return violations
 
     @staticmethod
+    def _collect_loop_carried_writes(
+        exec_part: Execution_Part,
+        initialized: Set[str],
+        skip_names: Set[int],
+    ):
+        """Pre-collect all writes inside DO loop bodies.
+
+        This handles loop-carried dependencies: a variable written later
+        in a loop body (e.g., via a CALL with INTENT(OUT)) is visible on
+        the next iteration to reads that appear earlier in the loop body.
+
+        Example::
+
+            DO itr = 1, maxitr
+              IF (itr > 1) THEN
+                b = a          ! read 'a' — only reached on itr >= 2
+              END IF
+              CALL sub(a)      ! writes 'a' via INTENT(OUT)
+            END DO
+
+        Without this pre-pass, 'a' would be falsely flagged as
+        uninitialized at the read site.
+        """
+        from fparser.two.Fortran2003 import (
+            Block_Nonlabel_Do_Construct,
+            Allocate_Stmt,
+        )
+
+        for do_construct in walk(exec_part, Block_Nonlabel_Do_Construct):
+            # Collect all writes from all statements inside the loop body
+            loop_writes: Set[str] = set()
+
+            # Assignment statements
+            for node in walk(do_construct, Assignment_Stmt):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            # Pointer assignments
+            for node in walk(do_construct, Pointer_Assignment_Stmt):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            # CALL statements (arguments may be written by called routine)
+            for node in walk(do_construct, Call_Stmt):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            # ALLOCATE statements (allocated variables are initialized)
+            for node in walk(do_construct, Allocate_Stmt):
+                for n in walk(node, Name):
+                    if id(n) not in skip_names:
+                        name = _node_to_str(n)
+                        if name.lower() not in FORTRAN_KEYWORDS:
+                            loop_writes.add(name)
+
+            # READ statements
+            for node in walk(do_construct, Read_Stmt):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            # WRITE statements (internal writes)
+            for node in walk(do_construct, Write_Stmt):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            # OPEN/CLOSE/INQUIRE statements
+            for node in walk(do_construct, (Open_Stmt, Close_Stmt, Inquire_Stmt)):
+                w, _ = ComDataInitialisation._get_writes_reads(node, skip_names)
+                loop_writes.update(w)
+
+            for name in loop_writes:
+                initialized.add(name.lower())
+                base = name.split("%")[0].strip()
+                initialized.add(base.lower())
+
+    @staticmethod
     def _get_writes_reads(node, skip_names: Set[int]) -> Tuple[Set[str], Set[str]]:
         """Extract written and read variable names from a statement node.
 
@@ -520,6 +603,11 @@ class ComDataInitialisation(FortranRule):
                 # Function_Reference and Part_Ref nodes.
                 from fparser.two.Fortran2003 import Part_Ref, Section_Subscript_List, Intrinsic_Function_Reference, Intrinsic_Name
 
+                # Collect Name nodes that are arguments to function calls
+                # — these may be intent(out) and thus writes.
+                # We store the actual Name nodes (not just id()) so we can
+                # call _node_to_str() on them later.
+                func_arg_nodes: List[Name] = []
                 func_arg_ids: Set[int] = set()
                 inquiry_arg_ids: Set[int] = set()
                 # Intrinsic_Function_Reference nodes (SIZE, LBOUND, etc.)
@@ -540,6 +628,7 @@ class ComDataInitialisation(FortranRule):
                         # Intrinsic with INTENT(OUT) args — treat as writes
                         for arg_spec in walk(intr_ref, Actual_Arg_Spec):
                             for n in walk(arg_spec, Name):
+                                func_arg_nodes.append(n)
                                 func_arg_ids.add(id(n))
                 # Function_Reference nodes
                 for func_ref in walk(rhs, Function_Reference):
@@ -557,6 +646,7 @@ class ComDataInitialisation(FortranRule):
                         # INTENT(OUT) args like nf90_inq_varid)
                         for arg_spec in walk(func_ref, Actual_Arg_Spec):
                             for n in walk(arg_spec, Name):
+                                func_arg_nodes.append(n)
                                 func_arg_ids.add(id(n))
                 # Part_Ref nodes (may be function calls)
                 for part_ref in walk(rhs, Part_Ref):
@@ -571,8 +661,9 @@ class ComDataInitialisation(FortranRule):
                             # Non-intrinsic or intrinsic with output args:
                             # treat args as writes (conservative)
                             for n in walk(children[1], Name):
+                                func_arg_nodes.append(n)
                                 func_arg_ids.add(id(n))
-                for n in func_arg_ids:
+                for n in func_arg_nodes:
                     writes.add(_node_to_str(n))
                 # RHS reads (skip implied DO loop variables and func args)
                 implied_do_vars = set()
