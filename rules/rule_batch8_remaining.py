@@ -253,15 +253,24 @@ class EumNameIdFormat(FortranRule):
                     # Skip if it's all uppercase (constant)
                     if var_name.isupper():
                         continue
-                    # Check if starts with expected type prefix
-                    if var_name and var_name[0].lower() != expected_prefix:
-                        line = _get_line(decl)
-                        fp = _get_source_file_path(decl) or file_path
-                        violations.append(Violation(
-                            rule_key=self.rule_key,
-                            message=f"Identifier '{var_name}' shall follow the [scope_][type]<name> format. Expected type prefix '{expected_prefix}'.",
-                            file_path=fp, line=line, severity=self.severity,
-                        ))
+                    # Check if starts with expected type prefix.
+                    # Support [scope_][type]<name> format.
+                    # 1. If first char matches expected type prefix → OK
+                    if var_name[0].lower() == expected_prefix:
+                        break  # OK, no violation
+                    # 2. If name has X_Y... format where X is a scope prefix
+                    #    (any letter) and Y matches expected type prefix → OK
+                    if (len(var_name) >= 3 and var_name[1] == '_'
+                            and var_name[2].lower() == expected_prefix):
+                        break  # OK with scope prefix
+                    # Doesn't match — flag it
+                    line = _get_line(decl)
+                    fp = _get_source_file_path(decl) or file_path
+                    violations.append(Violation(
+                        rule_key=self.rule_key,
+                        message=f"Identifier '{var_name}' shall follow the [scope_][type]<name> format. Expected type prefix '{expected_prefix}'.",
+                        file_path=fp, line=line, severity=self.severity,
+                    ))
                     break  # Only first name per entity
         return violations
 
@@ -277,10 +286,15 @@ class EumNamePublicFormat(FortranRule):
 
     def check(self, ast, file_path, symbol_table):
         violations = []
-        # Find module name
-        for module_stmt in walk(ast, Module_Stmt):
+        from fparser.two.Fortran2003 import Module, Access_Stmt
+
+        # Scope PUBLIC declarations to their module
+        for module in walk(ast, Module):
+            module_stmts = walk(module, Module_Stmt)
+            if not module_stmts:
+                continue
             module_name = ""
-            for child in walk(module_stmt, Name):
+            for child in walk(module_stmts[0], Name):
                 module_name = str(child).strip()
                 break
             if not module_name:
@@ -292,9 +306,8 @@ class EumNamePublicFormat(FortranRule):
             else:
                 module_id = module_name
 
-            # Find PUBLIC declarations
-            from fparser.two.Fortran2003 import Access_Stmt
-            for access_stmt in walk(ast, Access_Stmt):
+            # Find PUBLIC declarations within this module only
+            for access_stmt in walk(module, Access_Stmt):
                 stmt_str = str(access_stmt).upper()
                 if 'PUBLIC' not in stmt_str:
                     continue
@@ -305,6 +318,9 @@ class EumNamePublicFormat(FortranRule):
                 names_part = str(access_stmt).split('::')[-1].strip()
                 for name_str in names_part.split(','):
                     name_str = name_str.strip()
+                    # Skip operator/assignment declarations
+                    if name_str.lower().startswith('operator') or name_str.lower().startswith('assignment'):
+                        continue
                     if name_str and not name_str.upper().startswith(module_id.upper()):
                         line = _get_line(access_stmt)
                         fp = _get_source_file_path(access_stmt) or file_path
@@ -389,7 +405,7 @@ class EumNameConstants(FortranRule):
         violations = []
         for decl in walk(ast, Type_Declaration_Stmt):
             decl_str = str(decl)
-            if 'PARAMETER' not in decl_str.upper():
+            if not re.search(r'\bPARAMETER\b', decl_str.upper()):
                 continue
             # Get variable names
             for entity in walk(decl, Entity_Decl):
@@ -779,14 +795,21 @@ class EumInstArgOrder(FortranRule):
     def _get_intent(ast, arg_name: str) -> str:
         """Get the INTENT of a variable from type declarations."""
         for decl in walk(ast, Type_Declaration_Stmt):
-            decl_str = str(decl).upper()
-            if arg_name.upper() not in decl_str:
+            # Check if arg_name is actually declared in this statement
+            # (avoid substring matching: 'x' should not match 'xy')
+            declared_names = set()
+            for entity in walk(decl, Entity_Decl):
+                for name_node in walk(entity, Name):
+                    declared_names.add(str(name_node).strip().lower())
+                    break
+            if arg_name.lower() not in declared_names:
                 continue
-            if 'INTENT(IN)' in decl_str or 'INTENT (IN)' in decl_str:
+            decl_str = str(decl).upper()
+            if re.search(r'\bINTENT\s*\(\s*IN\s*\)', decl_str):
                 return 'IN'
-            if 'INTENT(INOUT)' in decl_str or 'INTENT (INOUT)' in decl_str:
+            if re.search(r'\bINTENT\s*\(\s*INOUT\s*\)', decl_str):
                 return 'INOUT'
-            if 'INTENT(OUT)' in decl_str or 'INTENT (OUT)' in decl_str:
+            if re.search(r'\bINTENT\s*\(\s*OUT\s*\)', decl_str):
                 return 'OUT'
         return ''
 
@@ -854,10 +877,16 @@ class EumInstDummyArgOrder(FortranRule):
                         break
 
             # Check if declaration order matches argument order
-            arg_order_in_decls = [a for a in decl_order if a in args]
-            if arg_order_in_decls != args:
+            # Only compare args that ARE found in declarations (some args
+            # may be declared with DIMENSION or other statements, not
+            # Type_Declaration_Stmt)
+            arg_set = set(args)
+            arg_order_in_decls = [a for a in decl_order if a in arg_set]
+            # Filter args to only those found in declarations
+            found_args = [a for a in args if a in set(decl_order)]
+            if arg_order_in_decls != found_args and len(arg_order_in_decls) == len(found_args):
                 # Find first mismatch
-                for i, (decl_arg, sig_arg) in enumerate(zip(arg_order_in_decls, args)):
+                for i, (decl_arg, sig_arg) in enumerate(zip(arg_order_in_decls, found_args)):
                     if decl_arg != sig_arg:
                         line = _get_line(stmt)
                         fp = _get_source_file_path(stmt) or file_path
@@ -1018,41 +1047,50 @@ class EumInstOptionalDefault(FortranRule):
 
     def check(self, ast, file_path, symbol_table):
         violations = []
-        # Find OPTIONAL arguments
-        optional_args = set()
+        from fparser.two.Fortran2003 import Intrinsic_Name
+        from rules.rule_batch2_declarations import F90InstIntent
+
+        # Find OPTIONAL arguments, scoped to their subprogram
         for decl in walk(ast, Type_Declaration_Stmt):
             decl_str = str(decl).upper()
-            if 'OPTIONAL' not in decl_str:
+            if not re.search(r'\bOPTIONAL\b', decl_str):
                 continue
             for entity in walk(decl, Entity_Decl):
                 for name_node in walk(entity, Name):
-                    optional_args.add(str(name_node).strip().lower())
+                    arg = str(name_node).strip().lower()
                     break
 
-        if not optional_args:
-            return violations
+                # Find the enclosing subprogram for this declaration
+                subprogram = F90InstIntent._find_enclosing_subprogram(decl)
+                search_root = subprogram if subprogram is not None else ast
 
-        # Check if each optional arg has a default assignment using PRESENT()
-        # Look for "if (.not. present(arg)) arg = ..."
-        for arg in optional_args:
-            has_default = False
-            for if_node in walk(ast, (If_Stmt, If_Construct)):
-                if_str = str(if_node)
-                if f'PRESENT({arg})' in if_str.upper() or f'PRESENT ({arg})' in if_str.upper():
-                    has_default = True
-                    break
-            if not has_default:
-                # Find the declaration line
-                for decl in walk(ast, Type_Declaration_Stmt):
-                    if arg.upper() in str(decl).upper() and 'OPTIONAL' in str(decl).upper():
-                        line = _get_line(decl)
-                        fp = _get_source_file_path(decl) or file_path
-                        violations.append(Violation(
-                            rule_key=self.rule_key,
-                            message=f"OPTIONAL argument '{arg}' shall have a default value assigned at procedure start using PRESENT().",
-                            file_path=fp, line=line, severity=self.severity,
-                        ))
-                        break
+                # Check if this optional arg has a PRESENT() call in the
+                # same subprogram (using AST-based detection)
+                has_present = False
+                for intrinsic in walk(search_root, Intrinsic_Name):
+                    if str(intrinsic).strip().upper() == 'PRESENT':
+                        # Check if this PRESENT() call references our arg
+                        # Walk up to the parent Intrinsic_Function_Reference
+                        # and check its arguments
+                        parent = intrinsic.parent
+                        while parent and not hasattr(parent, 'children'):
+                            parent = parent.parent
+                        if parent:
+                            for child in walk(parent, Name):
+                                if str(child).strip().lower() == arg:
+                                    has_present = True
+                                    break
+                        if has_present:
+                            break
+
+                if not has_present:
+                    line = _get_line(decl)
+                    fp = _get_source_file_path(decl) or file_path
+                    violations.append(Violation(
+                        rule_key=self.rule_key,
+                        message=f"OPTIONAL argument '{arg}' shall have a default value assigned at procedure start using PRESENT().",
+                        file_path=fp, line=line, severity=self.severity,
+                    ))
         return violations
 
 
@@ -1170,16 +1208,51 @@ class F90RefInterface(FortranRule):
 
     def check(self, ast, file_path, symbol_table):
         violations = []
+        from fparser.two.Fortran2003 import Module, Access_Stmt
+
+        for module in walk(ast, Module):
+            # Check if module has a default PRIVATE or PUBLIC statement
+            # (bare PRIVATE/PUBLIC without :: — sets default visibility)
+            has_default_visibility = False
+            for access_stmt in walk(module, Access_Stmt):
+                access_str = str(access_stmt).strip().upper()
+                if access_str in ('PUBLIC', 'PRIVATE') and '::' not in access_str:
+                    has_default_visibility = True
+                    break
+
+            # Check interface blocks within this module
+            for iface in walk(module, Interface_Block):
+                iface_str = str(iface).upper()
+                if 'PUBLIC' not in iface_str and 'PRIVATE' not in iface_str:
+                    # If module has default visibility, interface inherits it
+                    if not has_default_visibility:
+                        line = _get_line(iface)
+                        fp = _get_source_file_path(iface) or file_path
+                        violations.append(Violation(
+                            rule_key=self.rule_key,
+                            message="Interface blocks shall have explicit visibility (PUBLIC or PRIVATE).",
+                            file_path=fp, line=line, severity=self.severity,
+                        ))
+        # Also check interface blocks not inside any module
         for iface in walk(ast, Interface_Block):
-            iface_str = str(iface).upper()
-            if 'PUBLIC' not in iface_str and 'PRIVATE' not in iface_str:
-                line = _get_line(iface)
-                fp = _get_source_file_path(iface) or file_path
-                violations.append(Violation(
-                    rule_key=self.rule_key,
-                    message="Interface blocks shall have explicit visibility (PUBLIC or PRIVATE).",
-                    file_path=fp, line=line, severity=self.severity,
-                ))
+            # Skip if already checked inside a module
+            parent = iface.parent
+            in_module = False
+            while parent:
+                if isinstance(parent, Module):
+                    in_module = True
+                    break
+                parent = getattr(parent, 'parent', None)
+            if not in_module:
+                iface_str = str(iface).upper()
+                if 'PUBLIC' not in iface_str and 'PRIVATE' not in iface_str:
+                    line = _get_line(iface)
+                    fp = _get_source_file_path(iface) or file_path
+                    violations.append(Violation(
+                        rule_key=self.rule_key,
+                        message="Interface blocks shall have explicit visibility (PUBLIC or PRIVATE).",
+                        file_path=fp, line=line, severity=self.severity,
+                    ))
         return violations
 
 

@@ -582,8 +582,10 @@ class ComInstCodeComment(FortranRule):
         # GOTO / GO TO label
         r'GO\s*TO\s+\d'
         r'|'
-        # Assignment: var = expr  (but not == comparison)
-        r'\w+\s*=(?!=)'
+        # Assignment: var = expr  (but not == comparison, and require
+        # the value to look like code, not prose — must have non-space
+        # after = and not end with typical sentence punctuation)
+        r'\w+\s*=(?!=)\s*\S.*'
         r')'
     )
 

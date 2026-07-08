@@ -148,7 +148,16 @@ class F90BlocFile(FortranRule):
     @staticmethod
     def _extract_unit(stmt_str: str) -> str:
         """Extract the unit number from an OPEN/CLOSE statement."""
-        match = re.search(r'(?:OPEN|CLOSE)\s*\(\s*(?:UNIT\s*=\s*)?(\w+)', stmt_str, re.IGNORECASE)
+        # Try UNIT= first (handles keyword arguments in any order)
+        match = re.search(r'(?:OPEN|CLOSE)\s*\([^)]*\bUNIT\s*=\s*(\w+)', stmt_str, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        # Try NEWUNIT= (for OPEN statements)
+        match = re.search(r'OPEN\s*\([^)]*\bNEWUNIT\s*=\s*(\w+)', stmt_str, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        # Fallback: first positional argument (no keyword)
+        match = re.search(r'(?:OPEN|CLOSE)\s*\(\s*(\w+)', stmt_str, re.IGNORECASE)
         if match:
             return match.group(1)
         return ""
@@ -169,6 +178,11 @@ class ComFlowFileExistence(FortranRule):
         open_stmts = walk(ast, Open_Stmt)
         if open_stmts and not has_inquire:
             for open_stmt in open_stmts:
+                # Skip OPEN statements that don't need existence check
+                # (writing new files, replacing, or scratch files)
+                open_str = str(open_stmt).upper()
+                if re.search(r"STATUS\s*=\s*['\"](?:REPLACE|SCRATCH|NEW)['\"]", open_str):
+                    continue
                 line = _get_line(open_stmt)
                 fp = _get_source_file_path(open_stmt) or file_path
                 violations.append(Violation(
@@ -195,9 +209,26 @@ class EumInstFormatStmt(FortranRule):
         lines = _read_source_lines(file_path, symbol_table)
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('!') or stripped.startswith('c') or stripped.startswith('C'):
+            if stripped.startswith('!'):
                 continue
-            if self._INLINE_FMT.search(line):
+            # Strip inline comments (respecting string literals)
+            code_part = stripped
+            in_string = False
+            quote_char = None
+            for idx, ch in enumerate(code_part):
+                if ch in ('"', "'"):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif ch == quote_char:
+                        in_string = False
+                        quote_char = None
+                elif ch == '!' and not in_string:
+                    code_part = code_part[:idx].strip()
+                    break
+            if not code_part:
+                continue
+            if self._INLINE_FMT.search(code_part):
                 violations.append(Violation(
                     rule_key=self.rule_key,
                     message="READ and WRITE statements shall use FORMAT statement labels, not inline format strings.",
@@ -346,12 +377,29 @@ class EumInstPercentBlank(FortranRule):
         lines = _read_source_lines(file_path, symbol_table)
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('!') or stripped.startswith('c') or stripped.startswith('C'):
+            if stripped.startswith('!'):
+                continue
+            # Strip inline comments (respecting string literals)
+            code_part = stripped
+            in_string = False
+            quote_char = None
+            for idx, ch in enumerate(code_part):
+                if ch in ('"', "'"):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif ch == quote_char:
+                        in_string = False
+                        quote_char = None
+                elif ch == '!' and not in_string:
+                    code_part = code_part[:idx].strip()
+                    break
+            if not code_part:
                 continue
             # Check for spaces around % (but not in strings)
             in_string = False
             quote_char = None
-            for idx, ch in enumerate(line):
+            for idx, ch in enumerate(code_part):
                 if ch in ('"', "'"):
                     if not in_string:
                         in_string = True
@@ -361,14 +409,14 @@ class EumInstPercentBlank(FortranRule):
                         quote_char = None
                 elif not in_string and ch == '%':
                     # Check before and after
-                    if idx > 0 and line[idx - 1] == ' ':
+                    if idx > 0 and code_part[idx - 1] == ' ':
                         violations.append(Violation(
                             rule_key=self.rule_key,
                             message="No blanks shall be used before or after the % operator.",
                             file_path=file_path, line=i, severity=self.severity,
                         ))
                         break
-                    if idx < len(line) - 1 and line[idx + 1] == ' ':
+                    if idx < len(code_part) - 1 and code_part[idx + 1] == ' ':
                         violations.append(Violation(
                             rule_key=self.rule_key,
                             message="No blanks shall be used before or after the % operator.",

@@ -83,14 +83,28 @@ class ComInstLine(FortranRule):
         lines = _read_source_lines(file_path, symbol_table)
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('!') or stripped.startswith('c') or stripped.startswith('C'):
+            if stripped.startswith('!'):
                 continue
+            # Strip inline comments (respecting string literals)
+            code_part = stripped
+            in_string = False
+            quote_char = None
+            for idx, ch in enumerate(code_part):
+                if ch in ('"', "'"):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif ch == quote_char:
+                        in_string = False
+                        quote_char = None
+                elif ch == '!' and not in_string:
+                    code_part = code_part[:idx]
+                    break
             # Count semicolons (but not inside strings)
-            # Simple heuristic: count semicolons outside quotes
             in_string = False
             quote_char = None
             semicolon_count = 0
-            for ch in line:
+            for ch in code_part:
                 if ch in ('"', "'"):
                     if not in_string:
                         in_string = True
@@ -140,16 +154,33 @@ class F90NameKeyWords(FortranRule):
         lines = _read_source_lines(file_path, symbol_table)
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('!') or stripped.startswith('c') or stripped.startswith('C'):
+            if stripped.startswith('!'):
+                continue
+            # Strip inline comments (respecting string literals)
+            code_part = stripped
+            in_string = False
+            quote_char = None
+            for idx, ch in enumerate(code_part):
+                if ch in ('"', "'"):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif ch == quote_char:
+                        in_string = False
+                        quote_char = None
+                elif ch == '!' and not in_string:
+                    code_part = code_part[:idx].strip()
+                    break
+            if not code_part:
                 continue
             # Check for lowercase keywords at start of statement
             # Match word boundaries
-            for match in re.finditer(r'\b([a-zA-Z]+)\b', stripped):
+            for match in re.finditer(r'\b([a-zA-Z]+)\b', code_part):
                 word = match.group(1).lower()
                 if word in self._KEYWORDS and match.group(1) != match.group(1).upper():
-                    # Only flag if it's clearly a keyword usage (start of statement or after THEN/DO/etc)
+                    # Only flag if it's clearly a keyword usage (start of statement)
                     pos = match.start()
-                    if pos == 0 or stripped[:pos].strip() == '':
+                    if pos == 0 or code_part[:pos].strip() == '':
                         violations.append(Violation(
                             rule_key=self.rule_key,
                             message=f"FORTRAN keyword '{match.group(1)}' shall be written in uppercase.",
@@ -231,10 +262,15 @@ class ComPresData(FortranRule):
             # the first declaration in a group.
             if (line_num - 1) in decl_lines:
                 continue
-            # Check if previous line is a comment
+            # Check if previous line is a comment (skip blank lines)
             idx = line_num - 2  # 0-based index for previous line
-            if 0 <= idx < len(lines):
+            while 0 <= idx < len(lines):
                 prev_line = lines[idx].strip()
+                if prev_line == '':
+                    # Skip blank lines — look further back
+                    idx -= 1
+                    continue
+                break
             else:
                 prev_line = ""
             if not prev_line.startswith('!'):

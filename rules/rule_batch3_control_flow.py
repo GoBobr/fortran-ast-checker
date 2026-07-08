@@ -358,9 +358,27 @@ class F90InstOperator(FortranRule):
             return violations
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            if stripped.startswith('!') or stripped.startswith('c') or stripped.startswith('C'):
+            if stripped.startswith('!'):
                 continue
-            match = self._OLD_OPS.search(line)
+            # Strip inline comments and string literals before checking
+            code_part = stripped
+            in_string = False
+            quote_char = None
+            for idx, ch in enumerate(code_part):
+                if ch in ('"', "'"):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif ch == quote_char:
+                        in_string = False
+                        quote_char = None
+                elif ch == '!' and not in_string:
+                    code_part = code_part[:idx]
+                    break
+            # Also remove string content to avoid matching .EQ. in strings
+            clean_code = re.sub(r'"[^"]*"', '""', code_part)
+            clean_code = re.sub(r"'[^']*'", "''", clean_code)
+            match = self._OLD_OPS.search(clean_code)
             if match:
                 violations.append(Violation(
                     rule_key=self.rule_key,
