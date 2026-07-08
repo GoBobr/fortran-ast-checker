@@ -670,14 +670,53 @@ def _get_line(node) -> int:
     """Get the starting line number of an fparser AST node.
 
     Returns 0 if the line number cannot be determined.
+
+    Many fparser construct nodes (e.g. ``Derived_Type_Def``,
+    ``Interface_Block``, ``Module``) do not have ``item``/``span``
+    set.  In that case we try (in order):
+
+    1. Walk up the parent chain (up to 5 levels) — useful for ``Name``
+       nodes inside ``Call_Stmt``, ``Only_List``, etc.
+    2. Descend into children to find the first descendant with a valid
+       line number — useful for construct nodes whose child statement
+       nodes (e.g. ``Derived_Type_Stmt``, ``Interface_Stmt``) do carry
+       line information.
     """
     if node is None:
         return 0
+
+    # Fast path: the node itself has a valid line number.
     item = getattr(node, "item", None)
     if item is not None:
         span = getattr(item, "span", None)
         if span and len(span) >= 1:
             return span[0]
+
+    # Strategy 1: walk up the parent chain.
+    parent = getattr(node, "parent", None)
+    for _ in range(5):
+        if parent is None:
+            break
+        item = getattr(parent, "item", None)
+        if item is not None:
+            span = getattr(item, "span", None)
+            if span and len(span) >= 1:
+                return span[0]
+        parent = getattr(parent, "parent", None)
+
+    # Strategy 2: descend into children to find the first valid line.
+    children = getattr(node, "children", None)
+    if children:
+        from fparser.two.utils import walk as _walk
+        for child in _walk(node):
+            if child is node:
+                continue
+            item = getattr(child, "item", None)
+            if item is not None:
+                span = getattr(item, "span", None)
+                if span and len(span) >= 1:
+                    return span[0]
+
     return 0
 
 
@@ -919,6 +958,7 @@ class ProjectSymbolTable:
             Root directory of the source tree (for relative path display).
         """
         self.files = fortran_files
+        self._source_dir = source_root  # used by _read_source_lines()
         self._parser = ParserFactory().create(std="f2008")
 
         # Parse all files, store ASTs

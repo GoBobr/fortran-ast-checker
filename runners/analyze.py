@@ -2,7 +2,7 @@
 """Main fparser Fortran analyzer.
 
 Parses all .f90 files in a source directory, builds a project-wide
-symbol table, runs all 10 fparser-based rules, and outputs violations
+symbol table, runs all fparser-based rules, and outputs violations
 as JSON.
 
 Usage:
@@ -70,20 +70,249 @@ from rules.rule_com_flow_exit import ComFlowExit
 from rules.rule_com_design_alloc import ComDesignAlloc
 from rules.rule_f90_data_arrayaccess import F90DataArrayAccess
 
+# Batch 1: Simple keyword detection rules (20 rules)
+from rules.rule_batch1_simple import (
+    ComFlowAbort, F77InstSave, F90InstEquivalence, F77BlocCommon,
+    F77DataParameter, F77ProtoDeclaration, ComInstGoTo, F90DesignInclude,
+    F90InstEntry, EumInstBackspace, EumInstBlockData, EumInstNoData,
+    EumInstNamelist, EumInstContinue, F77InstDimension, EumInstNoUnderscoreKind,
+    F90InstPointer, F77InstAssign, F77InstPause, ComInstCodeComment,
+)
+
+# Batch 2: Declaration & type rules (15 rules)
+from rules.rule_batch2_declarations import (
+    F90InstIntent, F90DataArray, F90TypeDerivate, F77TypeBasic,
+    F90TypeInteger, F90TypeReal, F90DataParameter as F90DataParameterB2,
+    F90DataConstant, F90DataConstantFloat, F77DataDouble, F77TypeHollerith,
+    EumInstDoubleColon, EumInstCharLen, EumInstOneVarPerLine, EumTypePrivateInType,
+)
+
+# Batch 3: Control flow & structure rules (15 rules)
+from rules.rule_batch3_control_flow import (
+    F90InstIf, F77BlocElse, F90RefLabel, ComFlowCaseSwitch,
+    ComDataLoopCondition, ComFlowExitLoop, ComFlowRecursion, F90InstOperator,
+    EumInstEqvOperators, EumInstNoSingleLineWhere, EumBlocWhereElse,
+    EumInstNoLabelledDo, EumBlocNamedLoops, EumInstRedundant, F90DesignLogicUnit,
+)
+
+# Batch 4: Naming & formatting rules (20 rules)
+from rules.rule_batch4_naming_format import (
+    ComInstLine, F90NameKeyWords, ComNameHomonymy, ComPresData,
+    ComPresIndent, ComPresLengthLine, ComPresFileLength, ComProjectHeader,
+    F90FileHeader, EumPresNoTabs, EumPresIndentLevel, EumPresLabelJustify,
+    EumPresBlockAlign, EumPresCommentPos, EumPresNoCommentMultiLine,
+    EumPresNoEndLineComment, EumPresNoEmptyComment, EumPresDoxygen,
+    EumPresCommentBlock, EumPresBlankLines,
+)
+
+# Batch 5: Metrics & complexity rules (8 rules)
+from rules.rule_batch5_metrics import (
+    ComMetLineOfCode, ComMetComplexitySimplified, ComMetRatioComment,
+    EumMetMaxProcedures, EumMetMaxArguments, EumMetMaxAttributes,
+    EumMetMaxContinuation, ComInstBrace,
+)
+
+# Batch 6: I/O & file rules (12 rules)
+from rules.rule_batch6_io_file import (
+    F90RefOpen, ComFlowFilePath, F90BlocFile, ComFlowFileExistence,
+    EumInstFormatStmt, EumInstFormatPlacement, EumInstFreeFormatRead,
+    EumInstCompilerExt, EumInstPercentBlank, EumInstContinuation,
+    EumNameFormatLabels, F90DesignIO,
+)
+
+# Batch 7: Advanced AST rules (4 rules)
+from rules.rule_batch7_advanced import (
+    EumInstStatAfterAlloc, EumInstAssignmentOp, EumInstInitFinal,
+    ComDataInvariant,
+)
+
+# Batch 8: Remaining rules (32+ rules)
+from rules.rule_batch8_remaining import (
+    EumNameIdChars, EumNameIdLength, EumNameIdFormat, EumNamePublicFormat,
+    EumNamePrivateFormat, EumNameIdScope, EumNameConstants, EumNameProgramName,
+    EumNameModuleName, EumNameFileExt, EumDesignOneUnitPerFile,
+    EumDesignProgramStructure, EumDesignModuleStructure,
+    EumDesignSubroutineStructure, EumDesignNoGlobalVars, EumInstArgTypeDecl,
+    EumInstArgOrder, EumInstOptionalNamed, EumInstDummyArgOrder,
+    EumInstOptionalAfterMandatory, EumInstStringDim, EumInstFunctionIntent,
+    EumInstOptionalDefault, EumInstPureFunc, F90DesignInterface, F90InstOnly,
+    F90RefInterface, F90InstAssociated, F90InstNullify, F90DesignFree,
+    F90NameGenericIntrinsic, F77NameIntrinsic, F77NameLabel, F90RefArray,
+    F90RefVariable, F90ProtoOverload, F90DataFloat, F77InstFunction,
+    F77BlocFunction, F77InstReturn, F77InstIf as F77InstIfB8, F77BlocLoop,
+    F77MetLine, ComFlowBooleanExpression, ComFlowCheckArguments,
+    ComFlowCheckCodeReturn, ComFlowCheckUser, ComInstBoolNegation,
+    ComInstLoopCondition, ComDataNotUsed, ComDesignActiveWait,
+)
+
 logger = logging.getLogger(__name__)
 
-#: All 10 fparser-based rules, in order.
+#: All fparser-based rules, in order.
 ALL_RULES = [
-    F90DataDeclaration(),        # Rule 1: F90.DATA.Declaration
-    ComTypeExpression(),         # Rule 2: COM.TYPE.Expression
-    F90ErrOpenRead(),            # Rule 3: F90.ERR.OpenRead
-    ComDataInitialisation(),     # Rule 4: COM.DATA.Initialisation
-    F90ErrAllocate(),            # Rule 5: F90.ERR.Allocate
-    ComDataFloatCompare(),       # Rule 6: COM.DATA.FloatCompare
-    F90DesignObsolete(),         # Rule 7: F90.DESIGN.Obsolete
-    ComFlowExit(),               # Rule 8: COM.FLOW.Exit
-    ComDesignAlloc(),            # Rule 9: COM.DESIGN.Alloc
-    F90DataArrayAccess(),        # Rule 10: F90.DATA.ArrayAccess
+    # Original 10 rules
+    F90DataDeclaration(),        # F90.DATA.Declaration
+    ComTypeExpression(),         # COM.TYPE.Expression
+    F90ErrOpenRead(),            # F90.ERR.OpenRead
+    ComDataInitialisation(),     # COM.DATA.Initialisation
+    F90ErrAllocate(),            # F90.ERR.Allocate
+    ComDataFloatCompare(),       # COM.DATA.FloatCompare
+    F90DesignObsolete(),         # F90.DESIGN.Obsolete
+    ComFlowExit(),               # COM.FLOW.Exit
+    ComDesignAlloc(),            # COM.DESIGN.Alloc
+    F90DataArrayAccess(),        # F90.DATA.ArrayAccess
+    # Batch 1: Simple keyword detection (20 rules)
+    ComFlowAbort(),              # COM.FLOW.Abort
+    F77InstSave(),               # F77.INST.Save
+    F90InstEquivalence(),        # F90.INST.Equivalence
+    F77BlocCommon(),             # F77.BLOC.Common
+    F77DataParameter(),          # F77.DATA.Parameter
+    F77ProtoDeclaration(),       # F77.PROTO.Declaration
+    ComInstGoTo(),               # COM.INST.GoTo
+    F90DesignInclude(),          # F90.DESIGN.Include
+    F90InstEntry(),              # F90.INST.Entry
+    EumInstBackspace(),          # EUM.INST.Backspace
+    EumInstBlockData(),          # EUM.INST.BlockData
+    EumInstNoData(),             # EUM.INST.NoData
+    EumInstNamelist(),           # EUM.INST.Namelist
+    EumInstContinue(),           # EUM.INST.Continue
+    F77InstDimension(),          # F77.INST.Dimension
+    EumInstNoUnderscoreKind(),   # EUM.INST.NoUnderscoreKind
+    F90InstPointer(),            # F90.INST.Pointer
+    F77InstAssign(),             # F77.INST.Assign
+    F77InstPause(),              # F77.INST.Pause
+    ComInstCodeComment(),        # COM.INST.CodeComment
+    # Batch 2: Declaration & type rules (15 rules)
+    F90InstIntent(),             # F90.INST.Intent
+    F90DataArray(),              # F90.DATA.Array
+    F90TypeDerivate(),           # F90.TYPE.Derivate
+    F77TypeBasic(),              # F77.TYPE.Basic
+    F90TypeInteger(),            # F90.TYPE.Integer
+    F90TypeReal(),               # F90.TYPE.Real
+    F90DataParameterB2(),        # F90.DATA.Parameter
+    F90DataConstant(),           # F90.DATA.Constant
+    F90DataConstantFloat(),      # F90.DATA.ConstantFloat
+    F77DataDouble(),             # F77.DATA.Double
+    F77TypeHollerith(),          # F77.TYPE.Hollerith
+    EumInstDoubleColon(),        # EUM.INST.DoubleColon
+    EumInstCharLen(),            # EUM.INST.CharLen
+    EumInstOneVarPerLine(),      # EUM.INST.OneVarPerLine
+    EumTypePrivateInType(),      # EUM.TYPE.PrivateInType
+    # Batch 3: Control flow & structure rules (15 rules)
+    F90InstIf(),                 # F90.INST.If
+    F77BlocElse(),               # F77.BLOC.Else
+    F90RefLabel(),               # F90.REF.Label
+    ComFlowCaseSwitch(),         # COM.FLOW.CaseSwitch
+    ComDataLoopCondition(),      # COM.DATA.LoopCondition
+    ComFlowExitLoop(),           # COM.FLOW.ExitLoop
+    ComFlowRecursion(),          # COM.FLOW.Recursion
+    F90InstOperator(),           # F90.INST.Operator
+    EumInstEqvOperators(),       # EUM.INST.EqvOperators
+    EumInstNoSingleLineWhere(),  # EUM.INST.NoSingleLineWhere
+    EumBlocWhereElse(),          # EUM.BLOC.WhereElse
+    EumInstNoLabelledDo(),       # EUM.INST.NoLabelledDo
+    EumBlocNamedLoops(),         # EUM.BLOC.NamedLoops
+    EumInstRedundant(),          # EUM.INST.Redundant
+    F90DesignLogicUnit(),        # F90.DESIGN.LogicUnit
+    # Batch 4: Naming & formatting rules (20 rules)
+    ComInstLine(),               # COM.INST.Line
+    F90NameKeyWords(),           # F90.NAME.KeyWords
+    ComNameHomonymy(),           # COM.NAME.Homonymy
+    ComPresData(),               # COM.PRES.Data
+    ComPresIndent(),             # COM.PRES.Indent
+    ComPresLengthLine(),         # COM.PRES.LengthLine
+    ComPresFileLength(),         # COM.PRES.FileLength
+    ComProjectHeader(),          # COM.PROJECT.Header
+    F90FileHeader(),             # F90.FILE.Header
+    EumPresNoTabs(),             # EUM.PRES.NoTabs
+    EumPresIndentLevel(),        # EUM.PRES.IndentLevel
+    EumPresLabelJustify(),       # EUM.PRES.LabelJustify
+    EumPresBlockAlign(),         # EUM.PRES.BlockAlign
+    EumPresCommentPos(),         # EUM.PRES.CommentPos
+    EumPresNoCommentMultiLine(), # EUM.PRES.NoCommentMultiLine
+    EumPresNoEndLineComment(),   # EUM.PRES.NoEndLineComment
+    EumPresNoEmptyComment(),     # EUM.PRES.NoEmptyComment
+    EumPresDoxygen(),            # EUM.PRES.Doxygen
+    EumPresCommentBlock(),       # EUM.PRES.CommentBlock
+    EumPresBlankLines(),         # EUM.PRES.BlankLines
+    # Batch 5: Metrics & complexity rules (8 rules)
+    ComMetLineOfCode(),          # COM.MET.LineOfCode
+    ComMetComplexitySimplified(),# COM.MET.ComplexitySimplified
+    ComMetRatioComment(),        # COM.MET.RatioComment
+    EumMetMaxProcedures(),       # EUM.MET.MaxProcedures
+    EumMetMaxArguments(),        # EUM.MET.MaxArguments
+    EumMetMaxAttributes(),       # EUM.MET.MaxAttributes
+    EumMetMaxContinuation(),     # EUM.MET.MaxContinuation
+    ComInstBrace(),              # COM.INST.Brace
+    # Batch 6: I/O & file rules (12 rules)
+    F90RefOpen(),                # F90.REF.Open
+    ComFlowFilePath(),           # COM.FLOW.FilePath
+    F90BlocFile(),               # F90.BLOC.File
+    ComFlowFileExistence(),      # COM.FLOW.FileExistence
+    EumInstFormatStmt(),         # EUM.INST.FormatStmt
+    EumInstFormatPlacement(),    # EUM.INST.FormatPlacement
+    EumInstFreeFormatRead(),     # EUM.INST.FreeFormatRead
+    EumInstCompilerExt(),        # EUM.INST.CompilerExt
+    EumInstPercentBlank(),       # EUM.INST.PercentBlank
+    EumInstContinuation(),       # EUM.INST.Continuation
+    EumNameFormatLabels(),       # EUM.NAME.FormatLabels
+    F90DesignIO(),               # F90.DESIGN.IO
+    # Batch 7: Advanced AST rules (4 rules)
+    EumInstStatAfterAlloc(),     # EUM.INST.StatAfterAlloc
+    EumInstAssignmentOp(),       # EUM.INST.AssignmentOp
+    EumInstInitFinal(),          # EUM.INST.InitFinal
+    ComDataInvariant(),          # COM.DATA.Invariant
+    # Batch 8: Remaining rules (32+ rules)
+    EumNameIdChars(),            # EUM.NAME.IdChars
+    EumNameIdLength(),           # EUM.NAME.IdLength
+    EumNameIdFormat(),           # EUM.NAME.IdFormat
+    EumNamePublicFormat(),       # EUM.NAME.PublicFormat
+    EumNamePrivateFormat(),      # EUM.NAME.PrivateFormat
+    EumNameIdScope(),            # EUM.NAME.IdScope
+    EumNameConstants(),          # EUM.NAME.Constants
+    EumNameProgramName(),        # EUM.NAME.ProgramName
+    EumNameModuleName(),         # EUM.NAME.ModuleName
+    EumNameFileExt(),            # EUM.NAME.FileExt
+    EumDesignOneUnitPerFile(),   # EUM.DESIGN.OneUnitPerFile
+    EumDesignProgramStructure(), # EUM.DESIGN.ProgramStructure
+    EumDesignModuleStructure(),  # EUM.DESIGN.ModuleStructure
+    EumDesignSubroutineStructure(), # EUM.DESIGN.SubroutineStructure
+    EumDesignNoGlobalVars(),     # EUM.DESIGN.NoGlobalVars
+    EumInstArgTypeDecl(),        # EUM.INST.ArgTypeDecl
+    EumInstArgOrder(),           # EUM.INST.ArgOrder
+    EumInstOptionalNamed(),      # EUM.INST.OptionalNamed
+    EumInstDummyArgOrder(),      # EUM.INST.DummyArgOrder
+    EumInstOptionalAfterMandatory(), # EUM.INST.OptionalAfterMandatory
+    EumInstStringDim(),          # EUM.INST.StringDim
+    EumInstFunctionIntent(),     # EUM.INST.FunctionIntent
+    EumInstOptionalDefault(),    # EUM.INST.OptionalDefault
+    EumInstPureFunc(),           # EUM.INST.PureFunc
+    F90DesignInterface(),        # F90.DESIGN.Interface
+    F90InstOnly(),               # F90.INST.Only
+    F90RefInterface(),           # F90.REF.Interface
+    F90InstAssociated(),         # F90.INST.Associated
+    F90InstNullify(),            # F90.INST.Nullify
+    F90DesignFree(),             # F90.DESIGN.Free
+    F90NameGenericIntrinsic(),   # F90.NAME.GenericIntrinsic
+    F77NameIntrinsic(),          # F77.NAME.Intrinsic
+    F77NameLabel(),              # F77.NAME.Label
+    F90RefArray(),               # F90.REF.Array
+    F90RefVariable(),            # F90.REF.Variable
+    F90ProtoOverload(),          # F90.PROTO.Overload
+    F90DataFloat(),              # F90.DATA.Float
+    F77InstFunction(),           # F77.INST.Function
+    F77BlocFunction(),           # F77.BLOC.Function
+    F77InstReturn(),             # F77.INST.Return
+    F77InstIfB8(),               # F77.INST.If
+    F77BlocLoop(),               # F77.BLOC.Loop
+    F77MetLine(),                # F77.MET.Line
+    ComFlowBooleanExpression(),  # COM.FLOW.BooleanExpression
+    ComFlowCheckArguments(),     # COM.FLOW.CheckArguments
+    ComFlowCheckCodeReturn(),    # COM.FLOW.CheckCodeReturn
+    ComFlowCheckUser(),          # COM.FLOW.CheckUser
+    ComInstBoolNegation(),       # COM.INST.BoolNegation
+    ComInstLoopCondition(),      # COM.INST.LoopCondition
+    ComDataNotUsed(),            # COM.DATA.NotUsed
+    ComDesignActiveWait(),       # COM.DESIGN.ActiveWait
 ]
 
 
@@ -301,7 +530,7 @@ def main():
     parser.add_argument(
         "--rules",
         default=None,
-        help="Comma-separated rule keys to run (default: all 10 rules)",
+        help="Comma-separated rule keys to run (default: all rules)",
     )
     parser.add_argument(
         "--log-level",
