@@ -25,9 +25,14 @@ from fparser.two.Fortran2003 import (
     Association_List,
     Call_Stmt,
     Component_Spec,
+    Cycle_Stmt,
     Data_Pointer_Object,
     Data_Ref,
+    End_Do_Stmt,
+    End_If_Stmt,
+    End_Select_Stmt,
     Execution_Part,
+    Exit_Stmt,
     Function_Stmt,
     Function_Reference,
     If_Stmt,
@@ -297,6 +302,19 @@ class F90DataDeclaration(FortranRule):
                                 assoc_name = _node_to_str(assoc.children[0])
                                 if assoc_name:
                                     associate_names.add(assoc_name.lower())
+
+        # 6. Skip construct names (named DO/IF/SELECT labels)
+        #    e.g. 'innerloop: DO ... EXIT innerloop ... END DO innerloop'
+        #    The construct name appears as a Name node in EXIT, CYCLE,
+        #    and END statements. These are not variables.
+        for stmt_cls in (Exit_Stmt, Cycle_Stmt, End_Do_Stmt, End_If_Stmt, End_Select_Stmt):
+            for stmt in walk(exec_part, stmt_cls):
+                children = list(stmt.children)
+                if len(children) > 1 and isinstance(children[1], Name):
+                    skip.add(id(children[1]))
+                    construct_name = _node_to_str(children[1])
+                    if construct_name:
+                        associate_names.add(construct_name.lower())
 
         return skip, associate_names
 

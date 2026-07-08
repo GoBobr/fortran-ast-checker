@@ -661,6 +661,7 @@ class ScopeInfo:
     file_path: str = ""
     has_implicit_none: bool = True
     dummy_args: List[str] = field(default_factory=list)
+    has_external_use: bool = False  # True if USE without ONLY from a module not in our source
 
 
 # ---------------------------------------------------------------------------
@@ -1705,11 +1706,12 @@ class ProjectSymbolTable:
         for mod_name, only_list in scope.use_imports.items():
             mod_info = _find_module(mod_name)
             if mod_info is None:
-                # Module not in our project — mark all imports as external
+                # Module not in our project — it's a precompiled/external module
                 if only_list is None:
-                    # USE without ONLY — we can't know what's imported
-                    # Mark as "external module" — symbols will be unknown type
-                    pass
+                    # USE without ONLY — we can't know what's imported.
+                    # Mark the scope so is_declared() won't flag variables
+                    # that might come from this external module.
+                    scope.has_external_use = True
                 else:
                     for name in only_list:
                         if name not in resolved:
@@ -1795,6 +1797,22 @@ class ProjectSymbolTable:
         # Check if it's a Fortran keyword (not a variable)
         if name_lower in FORTRAN_KEYWORDS:
             return True
+
+        # If the scope (or any parent) has a USE without ONLY from an
+        # external/precompiled module, we can't know what's imported.
+        # Don't flag variables as undeclared — they might come from there.
+        if scope.has_external_use:
+            return True
+
+        # Also check parent scopes (contained procedures inherit USE)
+        parent_scope = scope.parent
+        while parent_scope:
+            parent = self._find_scope(parent_scope)
+            if parent is None:
+                break
+            if parent.has_external_use:
+                return True
+            parent_scope = parent.parent
 
         return False
 

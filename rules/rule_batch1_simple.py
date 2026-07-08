@@ -438,7 +438,11 @@ class EumInstNoUnderscoreKind(FortranRule):
             stripped = line.strip()
             if stripped.startswith('!'):
                 continue
-            for match in literal_kind_re.finditer(line):
+            # Remove string literals to avoid matching numbers inside strings
+            # (e.g., "AE@440_865" should not trigger a kind-notation violation)
+            code_only = re.sub(r'"[^"]*"', '""', line)
+            code_only = re.sub(r"'[^']*'", "''", code_only)
+            for match in literal_kind_re.finditer(code_only):
                 full = match.group(0)
                 if full not in seen:
                     seen.add(full)

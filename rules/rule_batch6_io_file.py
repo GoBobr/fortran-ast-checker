@@ -314,6 +314,11 @@ class EumInstCompilerExt(FortranRule):
         violations = []
         lines = _read_source_lines(file_path, symbol_table)
         for i, line in enumerate(lines, 1):
+            # Skip comment lines — the word "byte" in a comment like
+            # "!> @brief Save 1d byte" is not a compiler extension.
+            stripped = line.strip()
+            if stripped.startswith('!'):
+                continue
             for pattern in self._EXT_PATTERNS:
                 if pattern.search(line):
                     violations.append(Violation(

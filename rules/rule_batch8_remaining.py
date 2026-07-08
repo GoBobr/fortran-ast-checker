@@ -1370,9 +1370,21 @@ class F90NameGenericIntrinsic(FortranRule):
     def check(self, ast, file_path, symbol_table):
         violations = []
         seen = set()
+        # Collect variable names declared in Type_Declaration_Stmt so we don't
+        # flag local variables that happen to share a name with a specific
+        # intrinsic (e.g., DOUBLE PRECISION :: DMOD).
+        declared_var_names = set()
+        for decl in walk(ast, Type_Declaration_Stmt):
+            for entity in walk(decl, Entity_Decl):
+                for name_node in walk(entity, Name):
+                    declared_var_names.add(str(name_node).strip().upper())
+                    break
         for name in walk(ast, Name):
             name_str = str(name).strip()
             if name_str.upper() in self._SPECIFIC_TO_GENERIC and name_str not in seen:
+                # Skip if this name is a declared variable (not an intrinsic call)
+                if name_str.upper() in declared_var_names:
+                    continue
                 seen.add(name_str)
                 generic = self._SPECIFIC_TO_GENERIC[name_str.upper()]
                 line = _get_line(name)
