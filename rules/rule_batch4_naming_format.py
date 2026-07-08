@@ -130,7 +130,7 @@ class F90NameKeyWords(FortranRule):
     """FORTRAN keywords shall be written in uppercase and not used as variable names."""
 
     rule_key = "F90.NAME.KeyWords"
-    severity = "MAJOR"
+    severity = "MINOR"
 
     _KEYWORDS = {
         'program', 'module', 'subroutine', 'function', 'end', 'if', 'then',
