@@ -1363,20 +1363,58 @@ class F90DesignFree(FortranRule):
     severity = "MAJOR"
 
     @staticmethod
+    def _normalize_target(name):
+        """Normalize an allocation target name for comparison.
+
+        Removes spaces around % and -> so that 'grd % prefactor_src'
+        and 'grd%prefactor_src' compare equal.
+        """
+        import re
+        name = name.strip().lower()
+        name = re.sub(r'\s*%\s*', '%', name)
+        name = re.sub(r'\s*->\s*', '->', name)
+        return name
+
+    @staticmethod
     def _extract_alloc_targets(stmt):
         """Extract allocation target names from an ALLOCATE/DEALLOCATE statement.
 
         Only the actual allocation targets (e.g. fld%a1, ptr) are returned,
         not dimension variables or STAT variables.
+
+        Handles both ALLOCATE (which uses Allocation → Allocate_Object)
+        and DEALLOCATE (which uses Allocate_Object_List → Data_Ref).
         """
-        from fparser.two.Fortran2003 import Allocation
+        from fparser.two.Fortran2003 import (
+            Allocation, Allocate_Object_List, Allocate_Object, Data_Ref,
+        )
         targets = []
+
+        # ALLOCATE statements use Allocation nodes
         for alloc in walk(stmt, Allocation):
             # Allocation has: Allocate_Object, [Allocate_Shape_Spec_List], ...
             # The first child is the allocate object (the variable being allocated)
             if alloc.children and alloc.children[0] is not None:
                 obj = alloc.children[0]
-                targets.append(str(obj).strip().lower())
+                targets.append(F90DesignFree._normalize_target(str(obj)))
+
+        # DEALLOCATE statements use Allocate_Object_List → Data_Ref
+        # (no Allocation nodes). Also handle Allocate_Object directly.
+        if not targets:
+            for obj_list in walk(stmt, Allocate_Object_List):
+                if obj_list.children:
+                    for child in obj_list.children:
+                        if child is not None:
+                            targets.append(
+                                F90DesignFree._normalize_target(str(child))
+                            )
+            # Fallback: walk for Allocate_Object or Data_Ref directly
+            if not targets:
+                for obj in walk(stmt, (Allocate_Object, Data_Ref)):
+                    targets.append(
+                        F90DesignFree._normalize_target(str(obj))
+                    )
+
         return targets
 
     def check(self, ast, file_path, symbol_table):
